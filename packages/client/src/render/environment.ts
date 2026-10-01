@@ -1,5 +1,4 @@
 import * as THREE from 'three';
-import { Sky } from 'three/examples/jsm/objects/Sky.js';
 import { HDRLoader } from 'three/examples/jsm/loaders/HDRLoader.js';
 
 // Daytime stadium lighting: physical sky + clouds, a sun with soft shadows over the field and an
@@ -63,15 +62,32 @@ export interface Environment {
 }
 
 export function setupEnvironment(renderer: THREE.WebGLRenderer, scene: THREE.Scene): Environment {
-  // Physical sky
-  const sky = new Sky();
-  sky.scale.setScalar(55000);
-  const u = sky.material.uniforms;
-  u.turbidity.value = 4;
-  u.rayleigh.value = 1.2;
-  u.mieCoefficient.value = 0.004;
-  u.mieDirectionalG.value = 0.85;
-  u.sunPosition.value.copy(SUN_DIR);
+  // Stylized daytime sky: deep blue zenith, bright hazy horizon, warm glow towards the sun
+  const sky = new THREE.Mesh(
+    new THREE.SphereGeometry(52000, 32, 16),
+    new THREE.ShaderMaterial({
+      side: THREE.BackSide,
+      depthWrite: false,
+      fog: false,
+      uniforms: { uSun: { value: SUN_DIR } },
+      vertexShader: `varying vec3 vDir; void main() { vDir = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+      fragmentShader: `
+        uniform vec3 uSun;
+        varying vec3 vDir;
+        void main() {
+          float h = clamp(vDir.y, -0.2, 1.0);
+          vec3 zenith = vec3(0.10, 0.32, 0.78);
+          vec3 mid = vec3(0.30, 0.58, 0.92);
+          vec3 horizon = vec3(0.72, 0.84, 0.95);
+          vec3 col = mix(horizon, mid, smoothstep(0.0, 0.25, h));
+          col = mix(col, zenith, smoothstep(0.25, 0.9, h));
+          float s = max(dot(normalize(vDir), uSun), 0.0);
+          col += vec3(1.0, 0.85, 0.6) * (pow(s, 8.0) * 0.25 + pow(s, 600.0) * 4.0);
+          gl_FragColor = vec4(col, 1.0);
+        }`,
+    }),
+  );
+  sky.renderOrder = -2;
   scene.add(sky);
 
   // Cloud dome
@@ -82,7 +98,7 @@ export function setupEnvironment(renderer: THREE.WebGLRenderer, scene: THREE.Sce
   clouds.renderOrder = -1;
   scene.add(clouds);
 
-  scene.fog = new THREE.Fog('#b9d3ec', 16000, 52000);
+  scene.fog = new THREE.Fog('#a9c9ea', 30000, 60000);
 
   // Lights
   scene.add(new THREE.HemisphereLight('#cfe4ff', '#4a5a3a', 0.55));
@@ -109,7 +125,7 @@ export function setupEnvironment(renderer: THREE.WebGLRenderer, scene: THREE.Sce
     (hdr) => {
       const env = pmrem.fromEquirectangular(hdr).texture;
       scene.environment = env;
-      scene.environmentIntensity = 0.9;
+      scene.environmentIntensity = 0.6;
       hdr.dispose();
       pmrem.dispose();
     },

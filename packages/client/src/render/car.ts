@@ -97,21 +97,21 @@ function profile(points: [number, number][]) {
 function bodyStations(): Station[] {
   // Heights above ground
   const bottom = profile([[-48, 10], [-40, 7], [62, 7], [76, 12]]);
-  const top = profile([[-48, 38], [-36, 40], [-5, 35], [30, 31], [58, 26], [72, 19], [76, 14]]);
+  const top = profile([[-48, 40], [-36, 43], [-5, 39], [30, 35], [58, 30], [72, 22], [76, 15]]);
   const width = profile([[-48, 33], [-40, 39], [-34, 41.5], [-20, 40], [20, 39], [48, 41], [62, 39], [76, 30]]);
   const out: Station[] = [];
   const N = 46;
   for (let i = 0; i <= N; i++) {
     const x = -48 + (124 * i) / N;
     const w = width(x);
-    out.push({ x, yBottom: G + bottom(x), yTop: G + top(x), wBottom: w - 2, wTop: w - 6, n: 3.2 });
+    out.push({ x, yBottom: G + bottom(x), yTop: G + top(x), wBottom: w - 1, wTop: w - 4, n: 3.6 });
   }
   return out;
 }
 
 function cabinStations(): Station[] {
-  const top = profile([[-44, 40], [-36, 50], [-24, 56.5], [-2, 56.5], [8, 53], [26, 33]]);
-  const base = profile([[-44, 36], [26, 31]]);
+  const top = profile([[-44, 43], [-36, 52], [-24, 57], [-2, 57], [8, 54], [26, 36]]);
+  const base = profile([[-44, 40], [26, 35]]);
   const width = profile([[-44, 28], [-30, 31], [10, 31], [26, 30]]);
   const out: Station[] = [];
   const N = 30;
@@ -257,7 +257,7 @@ export function createCarModel(team: 0 | 1): CarModel {
   CAR.WHEELS.forEach((w, i) => {
     const r = i < 2 ? CAR.FRONT_WHEEL_RADIUS : CAR.BACK_WHEEL_RADIUS;
     const arch = new THREE.Mesh(archGeo(r), plastic);
-    arch.position.set(w.x, G + r + 1, -w.y + Math.sign(-w.y) * 9);
+    arch.position.set(w.x, G + r + 1, -w.y + Math.sign(-w.y) * 3);
     body.add(arch);
   });
 
@@ -336,7 +336,7 @@ export function createCarModel(team: 0 | 1): CarModel {
     const r = front ? CAR.FRONT_WHEEL_RADIUS + 1.5 : CAR.BACK_WHEEL_RADIUS + 1.5;
     const ww = front ? 13 : 16;
     const pivot = new THREE.Group();
-    pivot.position.set(w.x, G + r, -w.y + Math.sign(-w.y) * 9);
+    pivot.position.set(w.x, G + r, -w.y + Math.sign(-w.y) * 3);
     const spin = new THREE.Group();
     spin.add(new THREE.Mesh(cached(`tire${r}`, () => tireGeometry(r, ww)), tireMat));
     spin.add(rim(r, ww, chrome, darkMetal));
