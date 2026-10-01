@@ -6,8 +6,13 @@ export interface UiState {
   ballCamPressed: boolean;
   scoreboardHeld: boolean;
   pausePressed: boolean;
+  resetPressed: boolean;
+  /** quick chat category key pressed this frame (1-4) */
+  chatPressed: number;
   swivel: { x: number; y: number };
 }
+
+const CHAT_ACTIONS: Action[] = ['chatInfo', 'chatCompliments', 'chatReactions', 'chatApologies'];
 
 /**
  * Reads keyboard, mouse and gamepads and produces the car's ControllerInput.
@@ -16,7 +21,7 @@ export interface UiState {
 export class InputManager {
   settings: InputSettings = loadInputSettings();
   private down = new Set<string>();
-  private prevUi = { ballCam: false, pause: false };
+  private prevUi = { ballCam: false, pause: false, reset: false, chat: [false, false, false, false] };
   /** When set, the next key/button press is captured for rebinding instead of played. */
   captureHandler: ((code: string, kind: 'key' | 'pad') => void) | null = null;
   enabled = true;
@@ -99,7 +104,7 @@ export class InputManager {
 
   read(): { input: ControllerInput; ui: UiState } {
     const input = emptyInput();
-    const ui: UiState = { ballCamPressed: false, scoreboardHeld: false, pausePressed: false, swivel: { x: 0, y: 0 } };
+    const ui: UiState = { ballCamPressed: false, scoreboardHeld: false, pausePressed: false, resetPressed: false, chatPressed: 0, swivel: { x: 0, y: 0 } };
     if (!this.enabled) return { input, ui };
     this.pollCapture();
 
@@ -117,6 +122,8 @@ export class InputManager {
     let ballCam = this.key('ballCam');
     let scoreboard = this.key('scoreboard');
     let pause = this.key('pause');
+    let reset = this.key('resetBall');
+    const chat = CHAT_ACTIONS.map((a) => this.key(a));
 
     // Gamepads
     const dz = this.settings.deadzone;
@@ -144,6 +151,8 @@ export class InputManager {
       ballCam ||= btn('ballCam');
       scoreboard ||= btn('scoreboard');
       pause ||= btn('pause');
+      reset ||= btn('resetBall');
+      CHAT_ACTIONS.forEach((a, i) => (chat[i] ||= btn(a)));
       if (Math.abs(rx) > Math.abs(ui.swivel.x)) ui.swivel.x = rx;
       if (Math.abs(ry) > Math.abs(ui.swivel.y)) ui.swivel.y = -ry;
     }
@@ -166,7 +175,11 @@ export class InputManager {
     ui.ballCamPressed = ballCam && !this.prevUi.ballCam;
     ui.pausePressed = pause && !this.prevUi.pause;
     ui.scoreboardHeld = scoreboard;
-    this.prevUi = { ballCam, pause };
+    ui.resetPressed = reset && !this.prevUi.reset;
+    chat.forEach((c, i) => {
+      if (c && !this.prevUi.chat[i] && !ui.chatPressed) ui.chatPressed = i + 1;
+    });
+    this.prevUi = { ballCam, pause, reset, chat };
     return { input, ui };
   }
 

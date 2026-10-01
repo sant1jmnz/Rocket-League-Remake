@@ -10,3 +10,4 @@ export * from './physics/ball.js';
 export * from './physics/collisions.js';
 export * from './bot/bot.js';
 export * from './net/protocol.js';
+export * from './net/quickchat.js';

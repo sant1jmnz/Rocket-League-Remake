@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
 import { decodeSnapshot, emptyInput, packInput, type ServerMessage } from '@rl/shared';
 import { startServer, type RunningServer } from '../src/server.js';
+import { roomConfig } from '../src/room.js';
 
 let server: RunningServer;
 
@@ -117,4 +118,37 @@ describe('server', () => {
     a.ws.close();
     b.ws.close();
   });
+
+  it('late joiners replace a bot, and the room returns to the lobby after the match', async () => {
+    roomConfig.matchSeconds = 2;
+    roomConfig.postMatchSeconds = 1;
+    const a = new TestClient(server.port);
+    await a.open();
+    a.send({ t: 'create', name: 'Host', teamSize: 2 });
+    const room = await a.waitFor('room');
+    a.send({ t: 'start' });
+    await a.waitFor('start');
+    a.messages = [];
+    await new Promise((r) => setTimeout(r, 1000));
+
+    const late = new TestClient(server.port);
+    await late.open();
+    late.send({ t: 'join', name: 'Tarde', code: room.room.code });
+    const start = await late.waitFor('start');
+    await new Promise((r) => setTimeout(r, 500));
+    const snap = late.snapshots.at(-1)!;
+    expect(snap.state.cars).toHaveLength(4);
+    expect(snap.state.cars.find((c) => c.id === start.carId)?.isBot).toBe(false);
+    expect(snap.state.cars.filter((c) => c.isBot)).toHaveLength(2);
+
+    // Match ends (2 s clock, possibly overtime) and everybody goes back to the lobby
+    const lobby = await a.waitFor('room', (m) => m.room.status === 'lobby', 60000);
+    expect(lobby.room.players).toHaveLength(2);
+    const ended = a.snapshots.some((s) => s.state.phase === 'ended');
+    expect(ended).toBe(true);
+    roomConfig.matchSeconds = 300;
+    roomConfig.postMatchSeconds = 10;
+    a.ws.close();
+    late.ws.close();
+  }, 70000);
 });

@@ -138,3 +138,8 @@ table.controls td { padding: 4px 8px; border-top: 1px solid var(--line); }
   .lobby { grid-template-columns: 1fr; }
   .row > label { min-width: 0; width: 100%; }
 }
+
+.chat-menu { position: absolute; left: 24px; top: 40%; background: var(--panel); border-left: 3px solid var(--accent); padding: 10px 14px; border-radius: 4px; font-size: 15px; display: flex; flex-direction: column; gap: 4px; }
+.chat-menu.hidden { display: none; }
+.chat-menu .chat-title { font-family: var(--display); font-size: 18px; color: var(--accent); margin-bottom: 2px; }
+.chat-menu b { display: inline-block; width: 18px; color: var(--muted); }

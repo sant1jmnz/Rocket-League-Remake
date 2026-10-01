@@ -36,8 +36,14 @@ interface Member {
 
 const BOT_NAMES = ['Bandit', 'Viper', 'Rex', 'Sundown', 'Maverick', 'Fury', 'Stinger', 'Tex', 'Gonzo', 'Marley', 'Junker', 'Hound'];
 const SNAPSHOT_EVERY = 4; // 120 Hz sim, 30 Hz snapshots
-const POST_MATCH_SECONDS = 10;
 const BOT_ID_BASE = 30000;
+
+/** Tunables (overridable for tests / custom servers). */
+export const roomConfig = {
+  matchSeconds: Number(process.env.MATCH_SECONDS ?? 300),
+  postMatchSeconds: 10,
+  quickStartMs: 5000,
+};
 
 export class Room {
   readonly members = new Map<number, Member>();
@@ -114,7 +120,7 @@ export class Room {
     this.broadcastRoom();
     if (this.status === 'playing') this.sendStart(client.id);
     // Quick-match rooms start on their own; late joiners replace bots
-    else if (this.isPublic) this.scheduleAutoStart(5000);
+    else if (this.isPublic) this.scheduleAutoStart(roomConfig.quickStartMs);
     return true;
   }
 
@@ -194,7 +200,7 @@ export class Room {
         this.botNames.set(id, name);
       }
     }
-    startMatch(state);
+    startMatch(state, roomConfig.matchSeconds);
     this.state = state;
     this.status = 'playing';
     this.endedAt = -1;
@@ -282,7 +288,7 @@ export class Room {
 
     if (state.phase === 'ended') {
       if (this.endedAt < 0) this.endedAt = state.time;
-      if (state.time - this.endedAt > POST_MATCH_SECONDS) this.backToLobby();
+      if (state.time - this.endedAt > roomConfig.postMatchSeconds) this.backToLobby();
     }
   }
 

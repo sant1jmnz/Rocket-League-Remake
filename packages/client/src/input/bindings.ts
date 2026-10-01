@@ -17,7 +17,12 @@ export type Action =
   | 'powerslide'
   | 'ballCam'
   | 'scoreboard'
-  | 'pause';
+  | 'pause'
+  | 'resetBall'
+  | 'chatInfo'
+  | 'chatCompliments'
+  | 'chatReactions'
+  | 'chatApologies';
 
 export const ACTION_LABELS: Record<Action, string> = {
   throttle: 'Acelerar',
@@ -37,6 +42,11 @@ export const ACTION_LABELS: Record<Action, string> = {
   ballCam: 'Ball cam',
   scoreboard: 'Marcador',
   pause: 'Menú / pausa',
+  resetBall: 'Reiniciar balón (entrenamiento)',
+  chatInfo: 'Quick chat: información',
+  chatCompliments: 'Quick chat: felicitaciones',
+  chatReactions: 'Quick chat: reacciones',
+  chatApologies: 'Quick chat: disculpas',
 };
 
 /** Keyboard codes (KeyboardEvent.code) or mouse buttons as "Mouse0".."Mouse4". */
@@ -60,6 +70,11 @@ export const DEFAULT_KEYS: KeyBindings = {
   ballCam: ['Space'],
   scoreboard: ['Tab'],
   pause: ['Escape'],
+  resetBall: ['KeyR'],
+  chatInfo: ['Digit1'],
+  chatCompliments: ['Digit2'],
+  chatReactions: ['Digit3'],
+  chatApologies: ['Digit4'],
 };
 
 /**
@@ -81,6 +96,11 @@ export const DEFAULT_PAD: PadBindings = {
   ballCam: [3],
   scoreboard: [8],
   pause: [9],
+  resetBall: [11],
+  chatInfo: [12],
+  chatCompliments: [14],
+  chatReactions: [15],
+  chatApologies: [13],
 };
 
 export const PAD_BUTTON_NAMES = [

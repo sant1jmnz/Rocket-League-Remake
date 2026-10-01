@@ -42,7 +42,7 @@ export class Hud {
     this.boostWrap.innerHTML = `<svg viewBox="0 0 120 120"><circle class="bg" cx="60" cy="60" r="50"/><circle class="fg" cx="60" cy="60" r="50"/></svg>`;
     this.boostRing = this.boostWrap.querySelector('circle.fg')!;
     this.boostWrap.append(this.boostValue);
-    this.root.append(top, this.center, this.sub, this.feed, this.board, this.boostWrap, this.ballCamTag, this.statusTag, this.speedTag);
+    this.root.append(top, this.center, this.sub, this.feed, this.board, this.boostWrap, this.ballCamTag, this.statusTag, this.speedTag, this.chatMenu);
   }
 
   show(v: boolean) {
@@ -55,6 +55,22 @@ export class Hud {
     this.sub.textContent = sub;
     this.sub.className = `center-sub ${sub ? 'show' : ''}`;
     this.messageTimer = seconds;
+  }
+
+  private chatMenu = el('div', 'chat-menu hidden');
+
+  /** Quick chat: shows the options of a category (or hides with null). */
+  showChatMenu(title: string | null, options: string[] = []) {
+    if (!title) {
+      this.chatMenu.className = 'chat-menu hidden';
+      return;
+    }
+    this.chatMenu.className = 'chat-menu';
+    this.chatMenu.innerHTML = `<div class="chat-title">${escapeHtml(title)}</div>${options.map((o, i) => `<div><b>${i + 1}</b> ${escapeHtml(o)}</div>`).join('')}`;
+  }
+
+  chat(from: string, team: 0 | 1, text: string) {
+    this.pushFeed(`<span class="t${team}">${escapeHtml(from)}</span>: ${escapeHtml(text)}`);
   }
 
   private pushFeed(html: string) {
@@ -79,11 +95,17 @@ export class Hud {
           const kph = Math.round(e.speed * 0.036);
           const scorer = state.cars.find((c) => c.id === e.scorerId);
           const assist = state.cars.find((c) => c.id === e.assistId);
-          const sub = scorer
-            ? `${scorer.name}${assist ? ` (asistencia: ${assist.name})` : ''} · ${kph} km/h`
-            : `Autogol · ${kph} km/h`;
-          this.banner('¡GOL!', sub, 3, `goal t${e.team}`);
-          this.pushFeed(`⚽ ${scorer ? name(scorer.id) : 'Autogol'} anotó para ${TEAM_NAMES[e.team]}`);
+          const lastTouch = state.lastTouches.at(-1);
+          const ownGoal = !scorer && lastTouch && lastTouch.team !== e.team ? state.cars.find((c) => c.id === lastTouch.carId) : undefined;
+          const who = scorer
+            ? `${scorer.name}${assist ? ` (asistencia: ${assist.name})` : ''}`
+            : ownGoal
+              ? `Autogol de ${ownGoal.name}`
+              : '';
+          this.banner('¡GOL!', `${who ? `${who} · ` : ''}${kph} km/h`, 3, `goal t${e.team}`);
+          if (!state.freeplay) {
+            this.pushFeed(`⚽ ${scorer ? name(scorer.id) : ownGoal ? `Autogol de ${name(ownGoal.id)}` : 'Gol'} · ${TEAM_NAMES[e.team]}`);
+          }
           break;
         }
         case 'demo':

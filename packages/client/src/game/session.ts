@@ -71,6 +71,13 @@ export class OfflineSession implements Session {
     this.prev = cloneState(this.state);
   }
 
+  /** Freeplay: ball back to the center, car back on its spawn. */
+  resetFreeplay() {
+    if (!this.opts.freeplay) return;
+    startMatch(this.state);
+    this.prev = cloneState(this.state);
+  }
+
   restart() {
     startMatch(this.state);
     this.prev = cloneState(this.state);

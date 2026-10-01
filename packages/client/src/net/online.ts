@@ -30,6 +30,8 @@ export class NetClient {
   onMessage: ((m: ServerMessage) => void) | null = null;
   onSnapshot: ((data: ArrayBuffer) => void) | null = null;
   onClose: ((reason: string) => void) | null = null;
+  /** Debug: artificial round-trip latency in ms (?lag=150) */
+  private lag = Number(new URLSearchParams(location.search).get('lag') ?? 0) || 0;
 
   connect(url: string): Promise<void> {
     return new Promise((resolve, reject) => {
@@ -62,24 +64,29 @@ export class NetClient {
         this.ws = null;
       };
       ws.onmessage = (ev) => {
-        if (ev.data instanceof ArrayBuffer) {
-          const tag = new Uint8Array(ev.data, 0, 1)[0];
-          if (tag === SNAPSHOT_TAG) this.onSnapshot?.(ev.data);
-          return;
-        }
-        let msg: ServerMessage;
-        try {
-          msg = JSON.parse(ev.data as string) as ServerMessage;
-        } catch {
-          return;
-        }
-        if (msg.t === 'welcome') this.playerId = msg.playerId;
-        if (msg.t === 'room') this.room = msg.room;
-        if (msg.t === 'names' || msg.t === 'start') this.names = msg.names;
-        if (msg.t === 'pong') this.rtt = this.rtt * 0.8 + (performance.now() - msg.c) * 0.2;
-        this.onMessage?.(msg);
+        if (this.lag > 0) window.setTimeout(() => this.receive(ev), this.lag / 2);
+        else this.receive(ev);
       };
     });
+  }
+
+  private receive(ev: MessageEvent) {
+    if (ev.data instanceof ArrayBuffer) {
+      const tag = new Uint8Array(ev.data, 0, 1)[0];
+      if (tag === SNAPSHOT_TAG) this.onSnapshot?.(ev.data);
+      return;
+    }
+    let msg: ServerMessage;
+    try {
+      msg = JSON.parse(ev.data as string) as ServerMessage;
+    } catch {
+      return;
+    }
+    if (msg.t === 'welcome') this.playerId = msg.playerId;
+    if (msg.t === 'room') this.room = msg.room;
+    if (msg.t === 'names' || msg.t === 'start') this.names = msg.names;
+    if (msg.t === 'pong') this.rtt = this.rtt * 0.8 + (performance.now() - msg.c) * 0.2;
+    this.onMessage?.(msg);
   }
 
   get connected() {
@@ -87,7 +94,12 @@ export class NetClient {
   }
 
   send(m: ClientMessage) {
-    if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(m));
+    const data = JSON.stringify(m);
+    const go = () => {
+      if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(data);
+    };
+    if (this.lag > 0) window.setTimeout(go, this.lag / 2);
+    else go();
   }
 
   close() {
@@ -125,6 +137,8 @@ export class OnlineSession implements Session {
   private carError = new Map<number, Vec3>();
   private ballError: Vec3 = { x: 0, y: 0, z: 0 };
   private pendingSnapshot: ArrayBuffer | null = null;
+  /** Debug stats: how far the local car was corrected by the last snapshots (uu) */
+  readonly corrections: number[] = [];
 
   constructor(
     private net: NetClient,
@@ -169,6 +183,12 @@ export class OnlineSession implements Session {
 
     // Visual error smoothing (render offset decays instead of snapping)
     if (old.cars.length) {
+      const o = old.cars.find((x) => x.id === this.localCarId);
+      const n = st.cars.find((x) => x.id === this.localCarId);
+      if (o && n) {
+        this.corrections.push(Math.hypot(o.pos.x - n.pos.x, o.pos.y - n.pos.y, o.pos.z - n.pos.z));
+        if (this.corrections.length > 300) this.corrections.shift();
+      }
       for (const c of st.cars) {
         const o = old.cars.find((x) => x.id === c.id);
         if (!o || o.demolished !== c.demolished) continue;

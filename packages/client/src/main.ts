@@ -8,6 +8,7 @@ import { Menus } from './ui/menus';
 import { defaultServerUrl, loadSettings, saveSettings } from './ui/settings';
 import { OfflineSession, type Session } from './game/session';
 import { NetClient, OnlineSession } from './net/online';
+import { QuickChat } from './game/quickchat';
 
 const canvas = document.querySelector<HTMLCanvasElement>('#game')!;
 const overlay = document.querySelector<HTMLDivElement>('#overlay')!;
@@ -22,6 +23,7 @@ overlay.append(hud.root);
 let session: Session | null = null;
 let net: NetClient | null = null;
 let paused = false;
+const quickChat = new QuickChat();
 let endShown = false;
 let pendingRoomCode: string | null = new URLSearchParams(location.search).get('sala');
 
@@ -89,6 +91,9 @@ function onServerMessage(m: ServerMessage) {
       break;
     case 'error':
       menus.showOnline(m.message);
+      break;
+    case 'chat':
+      if (session?.kind === 'online') hud.chat(m.from, m.team, m.text);
       break;
   }
 }
@@ -185,6 +190,18 @@ function loop(now: number) {
       }
     }
     if (ui.ballCamPressed && !menus.visible) renderer.cam.ballCam = !renderer.cam.ballCam;
+    if (ui.resetPressed && !menus.visible && session instanceof OfflineSession) session.resetFreeplay();
+    if (ui.chatPressed && !menus.visible) {
+      const msg = quickChat.press(ui.chatPressed);
+      if (msg) {
+        const me = session.state.cars.find((c) => c.id === session!.localCarId);
+        if (session.kind === 'online') net?.send({ t: 'chat', text: msg });
+        else if (me) hud.chat(me.name, me.team, msg);
+      }
+    }
+    quickChat.update(dt);
+    const open = quickChat.open;
+    hud.showChatMenu(open ? open.title : null, open?.options);
     const controls = menus.visible ? emptyInput() : ci;
     const events = session.frame(dt, controls);
     const { prev, curr } = session.view();

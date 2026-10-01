@@ -3,7 +3,7 @@ import { readFile, stat } from 'node:fs/promises';
 import { dirname, extname, join, normalize, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, type WebSocket } from 'ws';
-import type { ClientMessage, ServerMessage, Team, TeamSize } from '@rl/shared';
+import { isQuickChat, type ClientMessage, type ServerMessage, type Team, type TeamSize } from '@rl/shared';
 import { Room, type Client } from './room.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -177,9 +177,9 @@ function handle(client: Client, msg: ClientMessage) {
       return;
     case 'chat': {
       const room = client.room;
-      if (!room || typeof msg.text !== 'string') return;
+      if (!room || typeof msg.text !== 'string' || !isQuickChat(msg.text)) return;
       const team = room.members.get(client.id)?.team ?? 0;
-      room.broadcast({ t: 'chat', from: client.name, team, text: msg.text.slice(0, 80) });
+      room.broadcast({ t: 'chat', from: client.name, team, text: msg.text });
       return;
     }
   }
