@@ -1,3 +1,9 @@
+import '@fontsource/exo-2/700-italic.css';
+import '@fontsource/exo-2/800-italic.css';
+import '@fontsource/exo-2/900-italic.css';
+import '@fontsource/titillium-web/400.css';
+import '@fontsource/titillium-web/600.css';
+import '@fontsource/titillium-web/700.css';
 import './styles.css';
 import { emptyInput, type ServerMessage, type Team, type TeamSize } from '@rl/shared';
 import { GameRenderer } from './render/renderer';
@@ -27,13 +33,8 @@ const quickChat = new QuickChat();
 let endShown = false;
 let pendingRoomCode: string | null = new URLSearchParams(location.search).get('sala');
 
-// Background "attract mode" match behind the main menu
-let attract: OfflineSession | null = null;
-function startAttract() {
-  attract = new OfflineSession({ teamSize: 3, freeplay: false, difficulty: 'allstar', playerName: '', team: 0 });
-  attract.state.cars = attract.state.cars.filter((c) => c.id !== 1);
-  attract.localCarId = -1;
-}
+// Team color previewed in the garage (main menu background)
+let previewTeam: Team = 0;
 
 function applySettings() {
   renderer.cam.settings = settings.camera;
@@ -50,7 +51,6 @@ function endSession() {
   menus.setInGame(false);
   hud.show(false);
   renderer.cam.reset();
-  if (!attract) startAttract();
 }
 
 async function ensureNet(): Promise<NetClient> {
@@ -76,7 +76,6 @@ function onServerMessage(m: ServerMessage) {
       if (!session) menus.showLobby(m.room, net.playerId);
       break;
     case 'start':
-      attract = null;
       session = new OnlineSession(net, m.carId, m.serverTick);
       paused = false;
       endShown = false;
@@ -84,6 +83,7 @@ function onServerMessage(m: ServerMessage) {
       menus.hide();
       hud.show(true);
       renderer.cam.reset();
+      renderer.hideShowcase();
       break;
     case 'left':
       if (session?.kind === 'online') endSession();
@@ -108,7 +108,6 @@ async function online(action: (n: NetClient) => void) {
 }
 
 function startOffline(opts: { teamSize: TeamSize; freeplay: boolean; difficulty: 'rookie' | 'pro' | 'allstar'; team: Team }) {
-  attract = null;
   session = new OfflineSession({ ...opts, playerName: settings.playerName, body: settings.carBody });
   paused = false;
   endShown = false;
@@ -116,6 +115,7 @@ function startOffline(opts: { teamSize: TeamSize; freeplay: boolean; difficulty:
   menus.hide();
   hud.show(true);
   renderer.cam.reset();
+  renderer.hideShowcase();
 }
 
 const menus = new Menus(settings, input, {
@@ -150,11 +150,11 @@ const menus = new Menus(settings, input, {
     }
   },
   settingsChanged: applySettings,
+  previewTeam: (t) => (previewTeam = t),
 });
 overlay.append(menus.root);
 hud.show(false);
 applySettings();
-startAttract();
 menus.showMain();
 
 // Invite links (?sala=CODE) join once the first frames are on screen
@@ -220,12 +220,8 @@ function loop(now: number) {
         if (session && curr.phase === 'ended') menus.showMatchEnd(won ? '¡Victoria!' : 'Derrota', true);
       }, 3000);
     }
-  } else if (attract) {
-    const events = attract.frame(dt, emptyInput());
-    if (attract.state.phase === 'ended') startAttract();
-    const { prev, curr } = attract.view();
-    renderer.handleEvents(events, curr, null);
-    renderer.render(prev, curr, attract.alpha, dt, { localCarId: null, showNames: false, bodyOf: (id) => attract!.bodyOf(id) }, { x: 0, y: 0 });
+  } else {
+    renderer.renderShowcase(dt, settings.carBody, previewTeam);
     audio.updateCar(null);
   }
   requestAnimationFrame(loop);

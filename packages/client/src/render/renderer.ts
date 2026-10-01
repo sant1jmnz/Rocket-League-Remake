@@ -20,6 +20,8 @@ import {
   createNameSprite,
 } from './models';
 import { createCarModel, type CarModel } from './car';
+
+const CAR_REST = 17.01;
 import { ParticleSystem } from './particles';
 import { setupEnvironment, type Environment } from './environment';
 import { PostFx } from './post';
@@ -59,6 +61,9 @@ export class GameRenderer {
   private shockwaves: { mesh: THREE.Mesh; t: number }[] = [];
   private time = 0;
   private env: Environment;
+  private showcase: CarModel | null = null;
+  private showcaseTeam: 0 | 1 = 0;
+  private turntable: THREE.Group | null = null;
   private post: PostFx;
 
   constructor(canvas: HTMLCanvasElement) {
@@ -254,6 +259,68 @@ export class GameRenderer {
     }
     this.env.update(dt);
     this.post.render();
+  }
+
+  /** Main-menu garage: the selected car slowly turning on a glowing platform at midfield. */
+  renderShowcase(dt: number, body: CarBody, team: 0 | 1) {
+    this.time += dt;
+    if (!this.turntable) {
+      this.turntable = new THREE.Group();
+      const disc = new THREE.Mesh(
+        new THREE.CylinderGeometry(118, 128, 12, 64),
+        new THREE.MeshStandardMaterial({ color: '#1b2030', metalness: 0.85, roughness: 0.25 }),
+      );
+      disc.position.y = 7;
+      disc.receiveShadow = true;
+      const ring = new THREE.Mesh(
+        new THREE.TorusGeometry(122, 3, 8, 96),
+        new THREE.MeshStandardMaterial({ color: '#59c3ff', emissive: '#3aa8ff', emissiveIntensity: 3 }),
+      );
+      ring.rotation.x = Math.PI / 2;
+      ring.position.y = 12;
+      this.turntable.add(disc, ring);
+      this.scene.add(this.turntable);
+    }
+    this.turntable.visible = true;
+    if (!this.showcase || this.showcase.bodyType !== body) {
+      if (this.showcase) this.scene.remove(this.showcase.root);
+      this.showcase = createCarModel(team, body);
+      this.showcase.root.traverse((o) => (o.castShadow = true));
+      this.scene.add(this.showcase.root);
+      this.showcaseTeam = team;
+    }
+    if (this.showcaseTeam !== team) {
+      this.showcase.setTeam(team);
+      this.showcaseTeam = team;
+    }
+    const ring = this.turntable.children[1] as THREE.Mesh;
+    (ring.material as THREE.MeshStandardMaterial).emissive.set(team === 0 ? '#3aa8ff' : '#ff8a2a');
+    this.showcase.root.visible = true;
+    this.showcase.root.position.set(0, 12 + CAR_REST, 0);
+    this.showcase.root.rotation.set(0, this.time * 0.35, 0);
+    this.showcase.setBoost(false, this.time);
+    for (const v of this.cars.values()) {
+      v.model.root.visible = false;
+      v.shadow.visible = false;
+      v.name.visible = false;
+    }
+    this.ball.visible = false;
+    this.ballShadow.visible = false;
+    this.padsView.update([], this.time, dt);
+
+    // Camera framing: car on the right third of the screen (menu on the left)
+    const cam = this.camera;
+    cam.position.set(-120, 85, 175);
+    cam.up.set(0, 1, 0);
+    cam.lookAt(-62, 38, 24);
+    this.env.update(dt);
+    this.post.render();
+  }
+
+  /** Leaves the garage view (call when a match starts). */
+  hideShowcase() {
+    if (this.showcase) this.showcase.root.visible = false;
+    if (this.turntable) this.turntable.visible = false;
   }
 
   private placeShadow(mesh: THREE.Mesh, p: { x: number; y: number; z: number }, visible: number, maxDist: number) {

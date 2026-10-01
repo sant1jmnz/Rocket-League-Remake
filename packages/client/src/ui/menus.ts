@@ -18,6 +18,7 @@ export interface MenuCallbacks {
   quitToMenu(): void;
   restartOffline(): void;
   settingsChanged(): void;
+  previewTeam(team: Team): void;
 }
 
 const h = (html: string): HTMLElement => {
@@ -75,29 +76,32 @@ export class Menus {
 
   showMain() {
     this.backTarget = () => this.showMain();
+    const carName = this.settings.carBody === 'fennec' ? 'Fennec' : 'Octane';
     const node = h(`<div class="main-menu">
-      <div class="logo"><span class="l1">ROCKET</span><span class="l2">REMAKE</span><div class="logo-sub">Fútbol con autos · física 1:1</div></div>
-      <div class="menu-list">
-        <button class="btn big" data-a="online">Jugar online</button>
-        <button class="btn big" data-a="offline">Jugar contra bots</button>
-        <button class="btn big" data-a="freeplay">Entrenamiento libre</button>
-        <button class="btn" data-a="controls">Controles</button>
-        <button class="btn" data-a="settings">Ajustes</button>
+      <div class="mm-left">
+        <div class="logo"><span class="l1">ROCKET</span><span class="l2">REMAKE</span></div>
+        <div class="tiles">
+          <button class="tile primary" data-a="online"><span class="tile-title">Jugar online</span><span class="tile-sub">Partida rápida o sala privada · 1v1 · 2v2 · 3v3</span></button>
+          <button class="tile" data-a="offline"><span class="tile-title">Contra bots</span><span class="tile-sub">Novato · Pro · All-Star</span></button>
+          <button class="tile" data-a="freeplay"><span class="tile-title">Entrenamiento libre</span><span class="tile-sub">Boost infinito · R reinicia el balón</span></button>
+          <button class="tile" data-a="garage"><span class="tile-title">Garaje</span><span class="tile-sub">${carName}</span></button>
+          <div class="tile-row">
+            <button class="tile small" data-a="controls"><span class="tile-title">Controles</span></button>
+            <button class="tile small" data-a="settings"><span class="tile-title">Ajustes</span></button>
+          </div>
+        </div>
       </div>
-      <div class="name-row"><label>Nombre</label><input class="name" maxlength="16" value="${esc(this.settings.playerName)}" /></div>
-      <div class="name-row"><label>Auto</label><div class="seg body">${(['octane', 'fennec'] as const)
-        .map((b) => `<button class="seg-btn ${this.settings.carBody === b ? 'on' : ''}" data-body="${b}">${b === 'octane' ? 'Octane' : 'Fennec'}</button>`)
-        .join('')}</div></div>
+      <div class="player-card">
+        <div class="avatar">${esc(this.settings.playerName.slice(0, 1).toUpperCase())}</div>
+        <div class="pc-info"><input class="name" maxlength="16" value="${esc(this.settings.playerName)}" /><span class="pc-car">${carName}</span></div>
+      </div>
       <div class="footer">Proyecto de fans sin fines de lucro. Sin afiliación con Psyonix ni Epic Games.</div>
     </div>`);
-    this.wireSeg(node, '.body', 'body', (v) => {
-      this.settings.carBody = v === 'fennec' ? 'fennec' : 'octane';
-      this.cb.settingsChanged();
-    });
     const name = node.querySelector<HTMLInputElement>('.name')!;
     name.addEventListener('change', () => {
       this.settings.playerName = name.value.trim().slice(0, 16) || this.settings.playerName;
       this.cb.settingsChanged();
+      this.showMain();
     });
     node.querySelectorAll<HTMLButtonElement>('[data-a]').forEach((b) =>
       b.addEventListener('click', () => {
@@ -105,11 +109,47 @@ export class Menus {
         if (a === 'online') this.showOnline();
         if (a === 'offline') this.showOffline();
         if (a === 'freeplay') this.cb.playFreeplay();
+        if (a === 'garage') this.showGarage();
         if (a === 'controls') this.showControls();
         if (a === 'settings') this.showSettings();
       }),
     );
     this.mount('main', node);
+  }
+
+  showGarage() {
+    this.backTarget = () => {
+      this.cb.previewTeam(0);
+      this.showMain();
+    };
+    const bodies = [
+      { id: 'octane', name: 'Octane', desc: 'Hitbox Octane · el más usado' },
+      { id: 'fennec', name: 'Fennec', desc: 'Hitbox Octane · forma cuadrada' },
+    ] as const;
+    const node = h(`<div class="garage">
+      <div class="panel-title">Garaje</div>
+      <div class="garage-section">Carrocería</div>
+      <div class="garage-cards">${bodies
+        .map((b) => `<button class="garage-card ${this.settings.carBody === b.id ? 'on' : ''}" data-body="${b.id}"><span class="gc-name">${b.name}</span><span class="gc-desc">${b.desc}</span></button>`)
+        .join('')}</div>
+      <div class="garage-section">Vista previa</div>
+      <div class="seg team"><button class="seg-btn on t0" data-t="0">Azul</button><button class="seg-btn t1" data-t="1">Naranja</button></div>
+      <div class="garage-stats">
+        <div><span>Largo</span><b>118.0</b></div><div><span>Ancho</span><b>84.2</b></div><div><span>Alto</span><b>36.2</b></div>
+      </div>
+      <button class="btn ghost back">← Volver</button>
+    </div>`);
+    node.querySelectorAll<HTMLButtonElement>('.garage-card').forEach((b) =>
+      b.addEventListener('click', () => {
+        node.querySelectorAll('.garage-card').forEach((x) => x.classList.remove('on'));
+        b.classList.add('on');
+        this.settings.carBody = b.dataset.body === 'fennec' ? 'fennec' : 'octane';
+        this.cb.settingsChanged();
+      }),
+    );
+    this.wireSeg(node, '.team', 't', (v) => this.cb.previewTeam(Number(v) as Team));
+    node.querySelector('.back')!.addEventListener('click', () => this.backTarget());
+    this.mount('garage', node);
   }
 
   private sizeButtons(selected: TeamSize, cls = 'size') {

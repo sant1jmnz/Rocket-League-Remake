@@ -38,9 +38,20 @@ export class Hud {
 
   constructor() {
     const top = el('div', 'topbar');
-    top.append(this.scoreBlue, this.clock, this.scoreOrange);
-    this.boostWrap.innerHTML = `<svg viewBox="0 0 120 120"><circle class="bg" cx="60" cy="60" r="50"/><circle class="fg" cx="60" cy="60" r="50"/></svg>`;
-    this.boostRing = this.boostWrap.querySelector('circle.fg')!;
+    const blue = el('div', 'team-box blue', '<span class="tname">AZUL</span>');
+    const orange = el('div', 'team-box orange', '<span class="tname">NARANJA</span>');
+    blue.append(this.scoreBlue);
+    orange.prepend(this.scoreOrange);
+    top.append(blue, this.clock, orange);
+    // 270° segmented gauge like the real boost meter (fills clockwise from the bottom-left)
+    this.boostWrap.innerHTML = `<svg viewBox="0 0 200 200">
+      <defs><linearGradient id="bgrad" x1="0" y1="1" x2="1" y2="0"><stop offset="0" stop-color="#ff7a00"/><stop offset="1" stop-color="#ffe14a"/></linearGradient></defs>
+      <circle class="disc" cx="100" cy="100" r="92"/>
+      <circle class="track" cx="100" cy="100" r="78"/>
+      <circle class="fill" cx="100" cy="100" r="78"/>
+      <circle class="gaps" cx="100" cy="100" r="78"/>
+    </svg>`;
+    this.boostRing = this.boostWrap.querySelector('circle.fill')!;
     this.boostWrap.append(this.boostValue);
     this.root.append(top, this.center, this.sub, this.feed, this.board, this.boostWrap, this.ballCamTag, this.statusTag, this.speedTag, this.chatMenu);
   }
@@ -144,9 +155,8 @@ export class Hud {
     if (car) {
       const b = state.unlimitedBoost ? 100 : car.boost;
       this.boostValue.textContent = state.unlimitedBoost ? '∞' : String(Math.floor(b));
-      const circ = 2 * Math.PI * 50;
-      this.boostRing.style.strokeDasharray = `${circ}`;
-      this.boostRing.style.strokeDashoffset = `${circ * (1 - b / 100)}`;
+      const arc = 2 * Math.PI * 78 * 0.75;
+      this.boostRing.style.strokeDasharray = `${(arc * b) / 100} 1000`;
       this.boostWrap.classList.toggle('t1', car.team === 1);
       this.speedTag.textContent = `${Math.round(vlen(car.vel) * 0.036)} km/h${car.isSupersonic ? ' · SUPERSÓNICO' : ''}`;
       if (car.demolished) {

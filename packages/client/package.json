@@ -9,6 +9,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@fontsource/exo-2": "^5.3.0",
+    "@fontsource/titillium-web": "^5.3.0",
     "@rl/shared": "*",
     "three": "^0.180.0"
   },

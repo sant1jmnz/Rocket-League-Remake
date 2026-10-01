@@ -46,6 +46,16 @@ sirve aparte, en **Ajustes → Servidor** se puede poner la URL `wss://…/ws`.
 | Quick chat | 1 · 2 · 3 · 4 (dos veces) | Cruceta |
 | Reiniciar balón (entrenamiento) | R | R3 |
 
+## Autos y gráficos
+
+- **Octane** y **Fennec** modelados por código (carrocería lofteada con secciones superelípticas,
+  pintura clearcoat, guardabarros, alerones, faros con bloom). Los dos usan la hitbox Octane, como en
+  el juego. Se eligen en **Garaje** y se ven online.
+- Estadio estilo DFH: pasto con franjas, rampas, franja LED por equipo, paredes de vidrio, arcos con
+  red hexagonal, tribunas de dos niveles con público, carteles LED y techo con reflectores.
+- Iluminación HDR (Poly Haven «Quarry 01», CC0), sombras, bloom y tipografías Exo 2 / Titillium Web
+  (OFL) incluidas en el paquete.
+
 ## Fidelidad con el juego real
 
 Toda la física está en `packages/shared` (TypeScript puro, determinista, 120 ticks por segundo):
