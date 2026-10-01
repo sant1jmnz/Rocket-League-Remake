@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { CarBody } from '@rl/shared';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { designFor, type Surface } from './car-designs';
 
 // Car models: Octane and Fennec rebuilt from parts (see car-designs.ts). Both use the Octane hitbox,
@@ -8,51 +9,95 @@ import { designFor, type Surface } from './car-designs';
 export const TEAM_PAINT = [new THREE.Color('#1d5bff'), new THREE.Color('#ff6a00')];
 const TEAM_ACCENT = ['#7fd0ff', '#ffd27a'];
 
+/** Rim radius as a fraction of the tire radius (measured on the reference wheel). */
+const RIM_RATIO = 0.77;
+
+/**
+ * Chunky off-road style tire: square shoulders, flat tread and V-shaped (chevron) tread blocks,
+ * merged into one geometry. Axle along Z.
+ */
 function tireGeometry(r: number, width: number): THREE.BufferGeometry {
-  // Lathe profile (radius, axial) of a chunky tire with rounded shoulders
-  const pts: THREE.Vector2[] = [];
   const hw = width / 2;
-  const inner = r * 0.62;
-  pts.push(new THREE.Vector2(inner, -hw));
-  pts.push(new THREE.Vector2(r - 3, -hw));
+  const inner = r * RIM_RATIO;
+  const sh = Math.min(2.4, width * 0.2); // shoulder radius
+  const base = r - 1.1; // carcass radius below the tread blocks
+  const pts: THREE.Vector2[] = [new THREE.Vector2(inner, -hw * 0.92)];
   for (let i = 0; i <= 6; i++) {
     const a = -Math.PI / 2 + (i / 6) * (Math.PI / 2);
-    pts.push(new THREE.Vector2(r - 3 + Math.cos(a) * 3, -hw + 3 + Math.sin(a) * 3));
+    pts.push(new THREE.Vector2(base - sh + Math.cos(a) * sh, -hw + sh + Math.sin(a) * sh));
   }
   for (let i = 0; i <= 6; i++) {
     const a = (i / 6) * (Math.PI / 2);
-    pts.push(new THREE.Vector2(r - 3 + Math.cos(a) * 3, hw - 3 + Math.sin(a) * 3));
+    pts.push(new THREE.Vector2(base - sh + Math.cos(a) * sh, hw - sh + Math.sin(a) * sh));
   }
-  pts.push(new THREE.Vector2(inner, hw));
-  const geo = new THREE.LatheGeometry(pts, 32);
-  geo.rotateX(Math.PI / 2); // lathe axis Y -> Z (wheel axle along car right)
-  return geo;
-}
+  pts.push(new THREE.Vector2(inner, hw * 0.92));
+  const carcass = new THREE.LatheGeometry(pts, 40);
+  carcass.rotateX(Math.PI / 2);
 
-function rim(r: number, width: number, mat: THREE.Material, dark: THREE.Material): THREE.Group {
-  const g = new THREE.Group();
-  const barrel = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.64, r * 0.64, width * 0.8, 24, 1, true), dark);
-  barrel.rotation.x = Math.PI / 2;
-  g.add(barrel);
-  const hub = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.2, r * 0.24, width * 0.9, 12), mat);
-  hub.rotation.x = Math.PI / 2;
-  g.add(hub);
-  for (let i = 0; i < 5; i++) {
-    const spoke = new THREE.Mesh(new THREE.BoxGeometry(r * 0.16, r * 0.62, 2.2), mat);
-    spoke.position.y = r * 0.31;
-    const pivot = new THREE.Group();
-    pivot.rotation.z = (i / 5) * Math.PI * 2;
-    pivot.add(spoke);
+  // Chevron blocks: two angled lugs per pitch, meeting at the center line
+  const lugs: THREE.BufferGeometry[] = [carcass];
+  const count = 22;
+  const lugLen = hw * 0.95;
+  for (let i = 0; i < count; i++) {
+    const ang = (i / count) * Math.PI * 2;
     for (const side of [-1, 1]) {
-      const p = pivot.clone();
-      p.position.z = side * (width * 0.38);
-      g.add(p);
+      const lug = new THREE.BoxGeometry(2.6, 1.3, lugLen);
+      // angle the lug along the circumference so the pair forms a V
+      lug.rotateY(side * 0.55);
+      lug.translate(side * 0.9, base + 0.5, side * lugLen * 0.48);
+      lug.rotateZ(ang);
+      lugs.push(lug.toNonIndexed());
     }
   }
-  return g;
+  const merged = mergeGeometries(lugs.map((g) => (g.index ? g.toNonIndexed() : g)));
+  merged.computeVertexNormals();
+  return merged;
 }
 
-
+/** Deep-dish rim with five split (double) spokes and a center cap. Axle along Z. */
+function rimGeometry(r: number, width: number): { metal: THREE.BufferGeometry; dark: THREE.BufferGeometry } {
+  const R = r * RIM_RATIO;
+  const face = width * 0.32; // spokes sit recessed behind the outer lip
+  const dark: THREE.BufferGeometry[] = [];
+  const metal: THREE.BufferGeometry[] = [];
+  const barrel = new THREE.CylinderGeometry(R * 0.98, R * 0.98, width * 0.9, 32, 1, true);
+  barrel.rotateX(Math.PI / 2);
+  dark.push(barrel);
+  const back = new THREE.CircleGeometry(R * 0.96, 32);
+  back.translate(0, 0, -width * 0.2);
+  dark.push(back);
+  for (const zs of [-1, 1]) {
+    const lip = new THREE.TorusGeometry(R * 0.99, 0.55, 6, 40);
+    lip.translate(0, 0, zs * width * 0.44);
+    metal.push(lip);
+  }
+  const hub = new THREE.CylinderGeometry(R * 0.2, R * 0.26, 3.2, 14);
+  hub.rotateX(Math.PI / 2);
+  hub.translate(0, 0, face);
+  metal.push(hub);
+  const cap = new THREE.CylinderGeometry(R * 0.09, R * 0.09, 3.6, 10);
+  cap.rotateX(Math.PI / 2);
+  cap.translate(0, 0, face + 0.3);
+  dark.push(cap);
+  for (let i = 0; i < 5; i++) {
+    const ang = (i / 5) * Math.PI * 2;
+    for (const split of [-1, 1]) {
+      const spoke = new THREE.BoxGeometry(R * 0.11, R * 0.78, 1.4);
+      spoke.translate(0, R * 0.58, 0);
+      spoke.rotateZ(split * 0.13); // the two halves of a spoke fan out towards the rim
+      spoke.rotateX(-0.16); // dish: spokes lean towards the outer face at the hub
+      spoke.translate(0, 0, face - 0.6);
+      spoke.rotateZ(ang);
+      metal.push(spoke);
+    }
+  }
+  const merge = (list: THREE.BufferGeometry[]) => {
+    const m = mergeGeometries(list.map((g) => (g.index ? g.toNonIndexed() : g)));
+    m.computeVertexNormals();
+    return m;
+  };
+  return { metal: merge(metal), dark: merge(dark) };
+}
 
 export interface CarModel {
   root: THREE.Group;
@@ -67,6 +112,7 @@ export interface CarModel {
 
 const geoCache: Record<string, THREE.BufferGeometry> = {};
 const cached = (k: string, f: () => THREE.BufferGeometry) => (geoCache[k] ??= f());
+const rimCache: Record<string, { metal: THREE.BufferGeometry; dark: THREE.BufferGeometry }> = {};
 
 export function createCarModel(team: 0 | 1, bodyType: CarBody = 'octane'): CarModel {
   const d = designFor(bodyType);
@@ -127,8 +173,8 @@ export function createCarModel(team: 0 | 1, bodyType: CarBody = 'octane'): CarMo
 
   // Wheels
   const wheels: CarModel['wheels'] = [];
-  const tireMat = new THREE.MeshStandardMaterial({ color: '#141414', roughness: 0.85 });
-  const rimMat = new THREE.MeshStandardMaterial({ color: '#8a919c', metalness: 0.9, roughness: 0.3 });
+  const tireMat = new THREE.MeshStandardMaterial({ color: '#161616', roughness: 0.92 });
+  const rimMat = new THREE.MeshStandardMaterial({ color: '#9aa1ab', metalness: 0.9, roughness: 0.28, side: THREE.DoubleSide });
   for (const w of d.wheels) {
     const r = w.front ? d.frontR : d.rearR;
     const ww = w.front ? d.frontW : d.rearW;
@@ -137,7 +183,15 @@ export function createCarModel(team: 0 | 1, bodyType: CarBody = 'octane'): CarMo
       pivot.position.set(w.x, w.y, side * w.z);
       const spin = new THREE.Group();
       spin.add(new THREE.Mesh(cached(`tire${r}-${ww}`, () => tireGeometry(r, ww)), tireMat));
-      spin.add(rim(r, ww, rimMat, mats.trim));
+      const rg = rimCache[`${r}-${ww}`] ??= rimGeometry(r, ww);
+      const metal = new THREE.Mesh(rg.metal, rimMat);
+      const dark = new THREE.Mesh(rg.dark, mats.trim);
+      // spokes face outwards on both sides of the car
+      if (side < 0) {
+        metal.scale.z = -1;
+        dark.scale.z = -1;
+      }
+      spin.add(metal, dark);
       spin.traverse((o) => (o.castShadow = true));
       pivot.add(spin);
       root.add(pivot);

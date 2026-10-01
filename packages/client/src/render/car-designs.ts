@@ -290,9 +290,9 @@ const tube = (a: THREE.Vector3, b: THREE.Vector3, r: number, surface: Surface): 
 const OCT_TOP: [number, number][] = [[-50, 22], [-44, 25], [-30, 25.5], [-22, 30], [-16, 32.5], [-6, 33.5], [8, 33.8], [16, 31.5], [24, 29], [32, 25], [40, 19.5], [48, 15], [56, 13], [64, 10.5], [72, 5.5], [78, 3]];
 
 function octane(): Design {
-  // Visual wheel sizes from the reference (wheel model scaled 0.75 front / 0.84 rear)
-  const frontR = 11;
-  const rearR = 12.7;
+  // Visual wheel sizes from the reference wheel (r 16, w 14) scaled 0.75 front / 0.84 rear
+  const frontR = 12;
+  const rearR = 13.4;
   const fwY = -6;
   const rwY = -4.3;
   const parts: Part[] = [];
@@ -398,8 +398,8 @@ function octane(): Design {
     parts,
     frontR,
     rearR,
-    frontW: 12,
-    rearW: 15,
+    frontW: 10.5,
+    rearW: 11.8,
     wheels: [
       { x: 51.3, y: fwY, z: 28.7, front: true },
       { x: -34.3, y: rwY, z: 31.7, front: false },
@@ -416,8 +416,8 @@ const FEN_ROOF: [number, number][] = [[-57, 17], [-53, 32.2], [-2, 32.8], [4, 32
 
 function fennec(): Design {
   // Visual wheel sizes from the reference (same wheel model as the Octane)
-  const frontR = 11.2;
-  const rearR = 12.7;
+  const frontR = 12;
+  const rearR = 13.4;
   const fwY = -6.1;
   const rwY = -4.6;
   const parts: Part[] = [];
@@ -507,8 +507,8 @@ function fennec(): Design {
     parts,
     frontR,
     rearR,
-    frontW: 13,
-    rearW: 15,
+    frontW: 10.5,
+    rearW: 11.8,
     wheels: [
       { x: 48.8, y: fwY, z: 30.7, front: true },
       { x: -36.5, y: rwY, z: 31.8, front: false },
