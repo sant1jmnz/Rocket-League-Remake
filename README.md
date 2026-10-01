@@ -25,6 +25,19 @@ npm run build    # compila el cliente (Vite) y el servidor (esbuild)
 npm start        # un solo proceso sirve la página y el WebSocket en el puerto $PORT (8080)
 ```
 
+### Publicarlo para jugar con amigos (gratis, en Render)
+
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/sant1jmnz/Rocket-League-Remake)
+
+1. Crear una cuenta en [render.com](https://render.com) y conectar GitHub.
+2. **New → Blueprint**, elegir este repositorio (y la rama, si no es la principal). Render lee
+   `render.yaml`: compila, arranca un solo servicio web y queda en `https://rocket-remake-xxxx.onrender.com`.
+3. Compartir ese enlace: cada uno abre la página, entra a **Jugar online** y se une a una sala o a una
+   partida rápida.
+
+El plan gratuito «duerme» el servicio si nadie lo usa durante un rato; el primer ingreso después
+tarda unos segundos en despertarlo.
+
 Con Docker: `docker build -t rocket-remake . && docker run -p 8080:8080 rocket-remake`.
 Sirve en cualquier hosting de Node con WebSockets (Render, Fly.io, Railway, un VPS…). Si el cliente se
 sirve aparte, en **Ajustes → Servidor** se puede poner la URL `wss://…/ws`.
@@ -85,6 +98,9 @@ Toda la física está en `packages/shared` (TypeScript puro, determinista, 120 t
   «balón al piso» en 0:00, tiempo extra con gol de oro, posiciones de kickoff reales, 34 boost pads
   (12/100, 4 s/10 s), demoliciones y reaparición a los 3 s, puntos (gol, asistencia, atajada, tiro,
   demolición).
+- **Después del gol**: 3 s de festejo y la repetición de los últimos segundos con la cámara sobre el
+  goleador; se omite cuando todos aprietan saltar, online también. Al final, la pantalla de
+  resultados con las estadísticas de cada jugador y el MVP (el mejor puntaje del equipo ganador).
 - **Cámara**: FOV 110, distancia 270, altura 110, ángulo −3, rigidez 0.5, giro 5, transición 1.
 
 ## Multijugador
