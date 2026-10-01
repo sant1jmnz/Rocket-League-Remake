@@ -1,12 +1,12 @@
 import * as THREE from 'three';
 import {
   BALL,
-  BOOST_PADS,
   arenaDistance,
   qforward,
   qslerp,
   vlen,
   vlerp,
+  type CarBody,
   type CarState,
   type GameEvent,
   type GameState,
@@ -23,6 +23,7 @@ import { createCarModel, type CarModel } from './car';
 import { ParticleSystem } from './particles';
 import { setupEnvironment, type Environment } from './environment';
 import { PostFx } from './post';
+import { BoostPadsView } from './pads';
 import { CameraController } from '../camera/camera';
 
 interface CarView {
@@ -39,6 +40,7 @@ export interface RenderOptions {
   localCarId: number | null;
   /** when true, local inputs drive the wheel steering visuals */
   showNames: boolean;
+  bodyOf?: (carId: number) => CarBody;
 }
 
 export class GameRenderer {
@@ -50,7 +52,7 @@ export class GameRenderer {
   private ball: THREE.Mesh;
   private ballShadow: THREE.Mesh;
   private ballIndicator: THREE.Mesh;
-  private pads: { base: THREE.Mesh; orb: THREE.Mesh | null; big: boolean }[] = [];
+  private padsView = new BoostPadsView();
   private boostFx = new ParticleSystem(4000, true);
   private smokeFx = new ParticleSystem(1500, false);
   private burstFx = new ParticleSystem(3000, true);
@@ -86,29 +88,7 @@ export class GameRenderer {
     this.ballIndicator.rotation.x = -Math.PI / 2;
     this.scene.add(this.ballIndicator);
 
-    // Boost pads
-    const smallMat = new THREE.MeshStandardMaterial({ color: '#ffcf4a', emissive: '#ffb000', emissiveIntensity: 1.2 });
-    const bigMat = new THREE.MeshStandardMaterial({ color: '#ffd35a', emissive: '#ff9a00', emissiveIntensity: 1.6 });
-    const baseMat = new THREE.MeshStandardMaterial({ color: '#3a3f48', metalness: 0.6, roughness: 0.4 });
-    for (const p of BOOST_PADS) {
-      const base = new THREE.Mesh(
-        new THREE.CylinderGeometry(p.big ? 150 : 46, p.big ? 165 : 54, 6, 24),
-        p.big ? baseMat : smallMat.clone(),
-      );
-      toThreeXYZ(p.x, p.y, 4, base.position);
-      this.scene.add(base);
-      let orb: THREE.Mesh | null = null;
-      if (p.big) {
-        orb = new THREE.Mesh(new THREE.SphereGeometry(70, 20, 14), bigMat.clone());
-        toThreeXYZ(p.x, p.y, 110, orb.position);
-        this.scene.add(orb);
-        const ring = new THREE.Mesh(new THREE.TorusGeometry(130, 10, 8, 32), bigMat);
-        ring.rotation.x = Math.PI / 2;
-        toThreeXYZ(p.x, p.y, 10, ring.position);
-        this.scene.add(ring);
-      }
-      this.pads.push({ base, orb, big: p.big });
-    }
+    this.scene.add(this.padsView.group);
 
     this.scene.add(this.boostFx.points, this.smokeFx.points, this.burstFx.points);
     this.resize();
@@ -133,8 +113,14 @@ export class GameRenderer {
     }
     for (const c of state.cars) {
       let view = this.cars.get(c.id);
+      const body = opts.bodyOf?.(c.id) ?? 'octane';
+      if (view && view.model.bodyType !== body) {
+        this.scene.remove(view.model.root, view.shadow, view.name);
+        this.cars.delete(c.id);
+        view = undefined;
+      }
       if (!view) {
-        const model = createCarModel(c.team);
+        const model = createCarModel(c.team, opts.bodyOf?.(c.id));
         const shadow = createBlobShadow(75, 0.45);
         shadow.scale.set(1.5, 1, 1);
         const name = createNameSprite(c.name, c.team === 0 ? '#9fd0ff' : '#ffc890');
@@ -237,18 +223,7 @@ export class GameRenderer {
     (this.ballShadow.material as THREE.MeshBasicMaterial).opacity = ballVisible ? 0.55 * Math.max(0.3, 1 - bp.z / 2500) : 0;
     this.ballIndicator.visible = false;
 
-    // Pads
-    curr.pads.forEach((t, i) => {
-      const pad = this.pads[i];
-      const active = t <= 0;
-      if (pad.orb) {
-        pad.orb.visible = active;
-        pad.orb.position.y = 110 + Math.sin(this.time * 2 + i) * 8;
-        pad.orb.rotation.y += dt;
-      } else {
-        (pad.base.material as THREE.MeshStandardMaterial).emissiveIntensity = active ? 1.4 : 0.05;
-      }
-    });
+    this.padsView.update(curr.pads, this.time, dt);
 
     // Effects
     this.boostFx.update(dt);

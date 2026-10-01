@@ -9,6 +9,7 @@ import {
   startMatch,
   stepGame,
   unpackInput,
+  type CarBody,
   type ControllerInput,
   type GameState,
   type RoomInfo,
@@ -21,6 +22,7 @@ export interface Client {
   id: number;
   name: string;
   ping: number;
+  body: CarBody;
   send(msg: ServerMessage): void;
   sendBinary(data: Uint8Array): void;
   room: Room | null;
@@ -140,7 +142,7 @@ export class Room {
         Object.assign(bot, { ...car, id: botId, name, isBot: true, bumpCooldowns: {} });
         this.bots.add(botId, 'pro');
         this.botNames.set(botId, name);
-        this.broadcast({ t: 'names', names: this.names() });
+        this.broadcast({ t: 'names', names: this.names(), bodies: this.bodies() });
       }
     }
     if (this.hostId === clientId) this.hostId = this.members.keys().next().value ?? -1;
@@ -177,6 +179,13 @@ export class Room {
     for (const m of this.members.values()) names[m.client.id] = m.client.name;
     for (const [id, n] of this.botNames) names[id] = n;
     return names;
+  }
+
+  private bodies(): Record<number, CarBody> {
+    const bodies: Record<number, CarBody> = {};
+    for (const m of this.members.values()) bodies[m.client.id] = m.client.body;
+    for (const id of this.botNames.keys()) bodies[id] = id % 2 ? 'fennec' : 'octane';
+    return bodies;
   }
 
   start(byClient?: number) {
@@ -224,13 +233,13 @@ export class Room {
     } else {
       addCar(state, clientId, m.team, m.client.name);
     }
-    this.broadcast({ t: 'names', names: this.names() });
+    this.broadcast({ t: 'names', names: this.names(), bodies: this.bodies() });
   }
 
   private sendStart(clientId: number) {
     const m = this.members.get(clientId);
     if (!m || !this.state) return;
-    m.client.send({ t: 'start', carId: clientId, serverTick: this.state.tick, names: this.names() });
+    m.client.send({ t: 'start', carId: clientId, serverTick: this.state.tick, names: this.names(), bodies: this.bodies() });
   }
 
   receiveInputs(clientId: number, inputs: unknown) {

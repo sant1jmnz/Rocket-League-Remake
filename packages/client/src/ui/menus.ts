@@ -85,8 +85,15 @@ export class Menus {
         <button class="btn" data-a="settings">Ajustes</button>
       </div>
       <div class="name-row"><label>Nombre</label><input class="name" maxlength="16" value="${esc(this.settings.playerName)}" /></div>
+      <div class="name-row"><label>Auto</label><div class="seg body">${(['octane', 'fennec'] as const)
+        .map((b) => `<button class="seg-btn ${this.settings.carBody === b ? 'on' : ''}" data-body="${b}">${b === 'octane' ? 'Octane' : 'Fennec'}</button>`)
+        .join('')}</div></div>
       <div class="footer">Proyecto de fans sin fines de lucro. Sin afiliación con Psyonix ni Epic Games.</div>
     </div>`);
+    this.wireSeg(node, '.body', 'body', (v) => {
+      this.settings.carBody = v === 'fennec' ? 'fennec' : 'octane';
+      this.cb.settingsChanged();
+    });
     const name = node.querySelector<HTMLInputElement>('.name')!;
     name.addEventListener('change', () => {
       this.settings.playerName = name.value.trim().slice(0, 16) || this.settings.playerName;

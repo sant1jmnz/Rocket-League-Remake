@@ -7,6 +7,11 @@ import type { CarState, ControllerInput, GameState, MatchPhase } from '../game/s
 
 export type TeamSize = 1 | 2 | 3;
 
+/** Visual car body (all use the Octane hitbox, like in the real game). */
+export type CarBody = 'octane' | 'fennec';
+export const CAR_BODIES: CarBody[] = ['octane', 'fennec'];
+export const validBody = (b: unknown): CarBody => (b === 'fennec' ? 'fennec' : 'octane');
+
 export interface LobbyPlayer {
   id: number;
   name: string;
@@ -24,9 +29,9 @@ export interface RoomInfo {
 }
 
 export type ClientMessage =
-  | { t: 'create'; name: string; teamSize: TeamSize }
-  | { t: 'join'; name: string; code: string }
-  | { t: 'quick'; name: string; teamSize: TeamSize }
+  | { t: 'create'; name: string; teamSize: TeamSize; body?: CarBody }
+  | { t: 'join'; name: string; code: string; body?: CarBody }
+  | { t: 'quick'; name: string; teamSize: TeamSize; body?: CarBody }
   | { t: 'team'; team: Team }
   | { t: 'size'; teamSize: TeamSize }
   | { t: 'start' }
@@ -40,8 +45,8 @@ export type ServerMessage =
   | { t: 'welcome'; playerId: number }
   | { t: 'room'; room: RoomInfo }
   | { t: 'left' }
-  | { t: 'start'; carId: number; serverTick: number; names: Record<number, string> }
-  | { t: 'names'; names: Record<number, string> }
+  | { t: 'start'; carId: number; serverTick: number; names: Record<number, string>; bodies?: Record<number, CarBody> }
+  | { t: 'names'; names: Record<number, string>; bodies?: Record<number, CarBody> }
   | { t: 'pong'; c: number; s: number }
   | { t: 'chat'; from: string; team: Team; text: string }
   | { t: 'error'; message: string };

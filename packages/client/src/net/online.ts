@@ -9,6 +9,7 @@ import {
   vadd,
   vscale,
   vsub,
+  type CarBody,
   type ClientMessage,
   type ControllerInput,
   type GameEvent,
@@ -25,6 +26,7 @@ export class NetClient {
   playerId = -1;
   room: RoomInfo | null = null;
   names: Record<number, string> = {};
+  bodies: Record<number, CarBody> = {};
   rtt = 100;
   private pingTimer: number | undefined;
   onMessage: ((m: ServerMessage) => void) | null = null;
@@ -84,7 +86,10 @@ export class NetClient {
     }
     if (msg.t === 'welcome') this.playerId = msg.playerId;
     if (msg.t === 'room') this.room = msg.room;
-    if (msg.t === 'names' || msg.t === 'start') this.names = msg.names;
+    if (msg.t === 'names' || msg.t === 'start') {
+      this.names = msg.names;
+      this.bodies = msg.bodies ?? {};
+    }
     if (msg.t === 'pong') this.rtt = this.rtt * 0.8 + (performance.now() - msg.c) * 0.2;
     this.onMessage?.(msg);
   }
@@ -264,6 +269,10 @@ export class OnlineSession implements Session {
       return c;
     };
     return { prev: fix(this.prev), curr: fix(this.state) };
+  }
+
+  bodyOf(id: number): CarBody {
+    return this.net.bodies[id] ?? 'octane';
   }
 
   status(): string {

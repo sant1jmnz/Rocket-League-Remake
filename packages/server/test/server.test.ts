@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
 import { decodeSnapshot, emptyInput, packInput, type ServerMessage } from '@rl/shared';
-import { startServer, type RunningServer } from '../src/server.js';
+import { getRoom, startServer, type RunningServer } from '../src/server.js';
 import { roomConfig } from '../src/room.js';
 
 let server: RunningServer;
@@ -128,6 +128,8 @@ describe('server', () => {
     const room = await a.waitFor('room');
     a.send({ t: 'start' });
     await a.waitFor('start');
+    // Avoid an open-ended overtime: blue is ahead, so the match ends at 0:00
+    getRoom(room.room.code)!.state!.score = [1, 0];
     a.messages = [];
     await new Promise((r) => setTimeout(r, 1000));
 
@@ -142,7 +144,10 @@ describe('server', () => {
     expect(snap.state.cars.filter((c) => c.isBot)).toHaveLength(2);
 
     // Match ends (2 s clock, possibly overtime) and everybody goes back to the lobby
-    const lobby = await a.waitFor('room', (m) => m.room.status === 'lobby', 60000);
+    const lobby = await a.waitFor('room', (m) => m.room.status === 'lobby', 60000).catch((e) => {
+      const st = a.snapshots.at(-1)?.state;
+      throw new Error(`${e.message}: phase=${st?.phase} clock=${st?.clock} running=${st?.clockRunning} score=${st?.score} ot=${st?.overtime} waitGround=${st?.waitingForBallGround} ballZ=${st?.ball.pos.z}`);
+    });
     expect(lobby.room.players).toHaveLength(2);
     const ended = a.snapshots.some((s) => s.state.phase === 'ended');
     expect(ended).toBe(true);

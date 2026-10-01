@@ -7,6 +7,7 @@ import {
   startMatch,
   stepGame,
   type BotDifficulty,
+  type CarBody,
   type ControllerInput,
   type GameEvent,
   type GameState,
@@ -27,6 +28,8 @@ export interface Session {
   frame(realDt: number, input: ControllerInput): GameEvent[];
   /** states to render (online sessions apply correction smoothing here) */
   view(): { prev: GameState; curr: GameState };
+  /** visual car body of a car */
+  bodyOf(id: number): CarBody;
   /** optional status text (ping, room code, ...) */
   status(): string;
   dispose(): void;
@@ -38,6 +41,7 @@ export interface OfflineOptions {
   difficulty: BotDifficulty;
   playerName: string;
   team: Team;
+  body?: CarBody;
 }
 
 const BOT_NAMES = ['Bandit', 'Viper', 'Rex', 'Sundown', 'Maverick', 'Fury', 'Stinger', 'Tex', 'Gonzo', 'Marley'];
@@ -101,6 +105,11 @@ export class OfflineSession implements Session {
 
   view() {
     return { prev: this.prev, curr: this.state };
+  }
+
+  bodyOf(id: number): CarBody {
+    if (id === this.localCarId) return this.opts.body ?? 'octane';
+    return id % 2 ? 'fennec' : 'octane';
   }
 
   status(): string {

@@ -28,6 +28,7 @@ export interface BotMemory {
   jumpHoldTimer: number;
   lastJump: boolean;
   stuckTimer: number;
+  kickoffWait: number;
   reverseTimer: number;
   reverseSteer: number;
 }
@@ -43,6 +44,7 @@ export const createBotMemory = (difficulty: BotDifficulty = 'pro'): BotMemory =>
   jumpHoldTimer: 0,
   lastJump: false,
   stuckTimer: 0,
+  kickoffWait: 0,
   reverseTimer: 0,
   reverseSteer: 0,
 });
@@ -255,8 +257,10 @@ function botInputInner(state: GameState, car: CarState, mem: BotMemory, ctx: Bot
   // ---------------------------------------------------------- kickoff
   const isKickoff = !state.clockRunning && state.phase === 'playing' && vlen(ball.vel) < 1 && Math.abs(ball.pos.x) < 1 && Math.abs(ball.pos.y) < 1;
   const role = pickRole(state, car);
+  mem.kickoffWait = isKickoff ? mem.kickoffWait + DT : 0;
   if (isKickoff) {
-    if (role === 'attacker') {
+    // If the teammate who should take the kickoff never goes (AFK player), take it anyway
+    if (role === 'attacker' || mem.kickoffWait > 2.5) {
       const target = v3(0, -attackDir * 40, 0);
       const { dist } = driveTo(car, target, out, { boost: true, maxThrottle: 1 });
       out.boost = car.boost > 0 && car.onGround;

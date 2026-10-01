@@ -3,7 +3,7 @@ import { readFile, stat } from 'node:fs/promises';
 import { dirname, extname, join, normalize, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, type WebSocket } from 'ws';
-import { isQuickChat, type ClientMessage, type ServerMessage, type Team, type TeamSize } from '@rl/shared';
+import { isQuickChat, validBody, type ClientMessage, type ServerMessage, type Team, type TeamSize } from '@rl/shared';
 import { Room, type Client } from './room.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -20,6 +20,9 @@ function newCode(): string {
     if (!rooms.has(c)) return c;
   }
 }
+
+/** Looks up a room by code (used by tests and tooling). */
+export const getRoom = (code: string) => rooms.get(code);
 
 function createRoom(teamSize: TeamSize, isPublic: boolean): Room {
   const room = new Room(newCode(), teamSize, isPublic, (r) => rooms.delete(r.code));
@@ -105,6 +108,7 @@ function onConnection(ws: WebSocket) {
     id: nextId,
     name: 'Jugador',
     ping: 0,
+    body: 'octane',
     room: null,
     send(msg: ServerMessage) {
       if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(msg));
@@ -142,12 +146,14 @@ function handle(client: Client, msg: ClientMessage) {
     case 'create': {
       client.room?.leave(client.id);
       client.name = cleanName(msg.name);
+      client.body = validBody(msg.body);
       createRoom(validSize(msg.teamSize), false).join(client);
       return;
     }
     case 'join': {
       client.room?.leave(client.id);
       client.name = cleanName(msg.name);
+      client.body = validBody(msg.body);
       const room = rooms.get(String(msg.code).toUpperCase());
       if (!room) client.send({ t: 'error', message: 'No existe una sala con ese código' });
       else if (!room.join(client)) client.send({ t: 'error', message: 'La sala está llena' });
@@ -156,6 +162,7 @@ function handle(client: Client, msg: ClientMessage) {
     case 'quick': {
       client.room?.leave(client.id);
       client.name = cleanName(msg.name);
+      client.body = validBody(msg.body);
       const size = validSize(msg.teamSize);
       const room =
         [...rooms.values()].find((r) => r.isPublic && r.teamSize === size && r.freeSlots() > 0) ?? createRoom(size, true);

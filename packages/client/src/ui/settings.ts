@@ -1,7 +1,9 @@
+import type { CarBody } from '@rl/shared';
 import { DEFAULT_CAMERA, type CameraSettings } from '../camera/camera';
 
 export interface AppSettings {
   playerName: string;
+  carBody: CarBody;
   camera: CameraSettings;
   volume: number;
   showNames: boolean;
@@ -18,6 +20,7 @@ export function defaultServerUrl(): string {
 export function loadSettings(): AppSettings {
   const d: AppSettings = {
     playerName: `Jugador${Math.floor(Math.random() * 900 + 100)}`,
+    carBody: 'octane',
     camera: { ...DEFAULT_CAMERA },
     volume: 0.6,
     showNames: true,

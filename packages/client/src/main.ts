@@ -109,7 +109,7 @@ async function online(action: (n: NetClient) => void) {
 
 function startOffline(opts: { teamSize: TeamSize; freeplay: boolean; difficulty: 'rookie' | 'pro' | 'allstar'; team: Team }) {
   attract = null;
-  session = new OfflineSession({ ...opts, playerName: settings.playerName });
+  session = new OfflineSession({ ...opts, playerName: settings.playerName, body: settings.carBody });
   paused = false;
   endShown = false;
   menus.setInGame(true);
@@ -121,9 +121,9 @@ function startOffline(opts: { teamSize: TeamSize; freeplay: boolean; difficulty:
 const menus = new Menus(settings, input, {
   playOffline: (o) => startOffline({ ...o, freeplay: false }),
   playFreeplay: () => startOffline({ teamSize: 1, freeplay: true, difficulty: 'pro', team: 0 }),
-  createRoom: (teamSize) => online((n) => n.send({ t: 'create', name: settings.playerName, teamSize })),
-  joinRoom: (code) => online((n) => n.send({ t: 'join', name: settings.playerName, code })),
-  quickMatch: (teamSize) => online((n) => n.send({ t: 'quick', name: settings.playerName, teamSize })),
+  createRoom: (teamSize) => online((n) => n.send({ t: 'create', name: settings.playerName, teamSize, body: settings.carBody })),
+  joinRoom: (code) => online((n) => n.send({ t: 'join', name: settings.playerName, code, body: settings.carBody })),
+  quickMatch: (teamSize) => online((n) => n.send({ t: 'quick', name: settings.playerName, teamSize, body: settings.carBody })),
   setTeam: (team) => net?.send({ t: 'team', team }),
   setTeamSize: (teamSize) => net?.send({ t: 'size', teamSize }),
   startRoom: () => net?.send({ t: 'start' }),
@@ -162,7 +162,7 @@ if (pendingRoomCode) {
   const code = pendingRoomCode;
   pendingRoomCode = null;
   requestAnimationFrame(() =>
-    requestAnimationFrame(() => void online((n) => n.send({ t: 'join', name: settings.playerName, code }))),
+    requestAnimationFrame(() => void online((n) => n.send({ t: 'join', name: settings.playerName, code, body: settings.carBody }))),
   );
 }
 
@@ -209,7 +209,7 @@ function loop(now: number) {
     renderer.handleEvents(events, curr, session.localCarId);
     hud.handleEvents(events, curr, session.localCarId);
     audio.handleEvents(events, session.localCarId);
-    renderer.render(prev, curr, session.alpha, paused && session.kind === 'offline' ? 0 : dt, { localCarId: session.localCarId, showNames: settings.showNames }, ui.swivel);
+    renderer.render(prev, curr, session.alpha, paused && session.kind === 'offline' ? 0 : dt, { localCarId: session.localCarId, showNames: settings.showNames, bodyOf: (id) => session!.bodyOf(id) }, ui.swivel);
     hud.update(dt, curr, session.localCarId, { scoreboard: ui.scoreboardHeld, ballCam: renderer.cam.ballCam, status: session.status() });
     audio.updateCar(paused ? null : local);
 
@@ -225,7 +225,7 @@ function loop(now: number) {
     if (attract.state.phase === 'ended') startAttract();
     const { prev, curr } = attract.view();
     renderer.handleEvents(events, curr, null);
-    renderer.render(prev, curr, attract.alpha, dt, { localCarId: null, showNames: false }, { x: 0, y: 0 });
+    renderer.render(prev, curr, attract.alpha, dt, { localCarId: null, showNames: false, bodyOf: (id) => attract!.bodyOf(id) }, { x: 0, y: 0 });
     audio.updateCar(null);
   }
   requestAnimationFrame(loop);
