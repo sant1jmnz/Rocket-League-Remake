@@ -53,8 +53,18 @@ sirve aparte, en **Ajustes → Servidor** se puede poner la URL `wss://…/ws`.
   aleta, paneles traseros, motor expuesto y alerón sobre poste; el Fennec como hatchback con capó
   largo, techo recto, cola vertical, arcos redondos y parrilla con faros redondos. Ventanas con
   máscara por píxel. Los dos usan la hitbox Octane, como en el juego. Se eligen en **Garaje**.
-- Estadio estilo DFH: pasto con franjas, rampas, franja LED por equipo, paredes de vidrio, arcos con
-  red hexagonal, tribunas de dos niveles con público, carteles LED y techo con reflectores.
+- Cancha con el diseño actual del DFH Stadium, medido sobre una vista cenital de referencia y
+  dibujado por código:
+  - pasto oliva con circuito hexagonal y franjas del color de cada equipo;
+  - zonas oscuras de malla hexagonal frente a los arcos y junto a las paredes laterales;
+  - cruz metálica central y pad hexagonal en el centro;
+  - rampas de metal gris y una franja de pantallas sobre ellas;
+  - paredes y techo de vidrio con un panal grande;
+  - arcos con marcos redondeados luminosos.
+- Estadio con sus proporciones: anillo de pasto, bandeja baja y una alta mucho más grande con público
+  vestido del color de cada equipo, y un anillo de techo negro con vidrio y reflectores.
+- Balón con el diseño del balón por defecto: caras tipo cubo, almohadillas con nervaduras opuestas a
+  caras de malla hexagonal con luces turquesa, y ejes de tres brazos en los polos.
 - Iluminación HDR (Poly Haven «Quarry 01», CC0), sombras, bloom y tipografías Exo 2 / Titillium Web
   (OFL) incluidas en el paquete.
 
