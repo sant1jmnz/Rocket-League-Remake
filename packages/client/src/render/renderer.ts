@@ -17,11 +17,12 @@ import {
   TEAM_COLORS,
   createBallModel,
   createBlobShadow,
-  createCarModel,
   createNameSprite,
-  type CarModel,
 } from './models';
+import { createCarModel, type CarModel } from './car';
 import { ParticleSystem } from './particles';
+import { setupEnvironment, type Environment } from './environment';
+import { PostFx } from './post';
 import { CameraController } from '../camera/camera';
 
 interface CarView {
@@ -55,52 +56,21 @@ export class GameRenderer {
   private burstFx = new ParticleSystem(3000, true);
   private shockwaves: { mesh: THREE.Mesh; t: number }[] = [];
   private time = 0;
+  private env: Environment;
+  private post: PostFx;
 
   constructor(canvas: HTMLCanvasElement) {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.05;
+    this.renderer.toneMappingExposure = 1.0;
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.cam = new CameraController(this.camera);
 
-    // Sky gradient
-    const sky = document.createElement('canvas');
-    sky.width = 2;
-    sky.height = 256;
-    const g = sky.getContext('2d')!;
-    const grad = g.createLinearGradient(0, 0, 0, 256);
-    grad.addColorStop(0, '#2c5c9e');
-    grad.addColorStop(0.55, '#86b6e3');
-    grad.addColorStop(1, '#d8c7a6');
-    g.fillStyle = grad;
-    g.fillRect(0, 0, 2, 256);
-    const skyTex = new THREE.CanvasTexture(sky);
-    skyTex.colorSpace = THREE.SRGBColorSpace;
-    this.scene.background = skyTex;
-    this.scene.fog = new THREE.Fog('#9fb6cf', 14000, 40000);
-
-    // Lights
-    this.scene.add(new THREE.HemisphereLight('#dbe8ff', '#3a4a2a', 1.1));
-    const sun = new THREE.DirectionalLight('#fff2d6', 2.2);
-    sun.position.set(3000, 9000, 2500);
-    sun.castShadow = true;
-    sun.shadow.mapSize.set(2048, 2048);
-    const sc = sun.shadow.camera as THREE.OrthographicCamera;
-    sc.left = -6500;
-    sc.right = 6500;
-    sc.top = 7000;
-    sc.bottom = -7000;
-    sc.near = 100;
-    sc.far = 20000;
-    sun.shadow.bias = -0.0005;
-    this.scene.add(sun);
-    // Fill light from the opposite side so cars facing away from the sun keep their colors
-    const fill = new THREE.DirectionalLight('#cfe0ff', 0.9);
-    fill.position.set(-3000, 6000, -4000);
-    this.scene.add(fill);
+    this.env = setupEnvironment(this.renderer, this.scene);
+    this.post = new PostFx(this.renderer, this.scene, this.camera);
 
     this.scene.add(buildArena().group);
 
@@ -148,6 +118,7 @@ export class GameRenderer {
     const w = window.innerWidth;
     const h = window.innerHeight;
     this.renderer.setSize(w, h, false);
+    this.post.setSize(w, h, this.renderer.getPixelRatio());
     this.cam.updateFov(w / h);
     for (const fx of [this.boostFx, this.smokeFx, this.burstFx]) fx.setViewportHeight(h * this.renderer.getPixelRatio(), this.camera.fov);
   }
@@ -212,10 +183,8 @@ export class GameRenderer {
 
       // Boost flame + trail
       const boosting = car.boostingTime > 0 && !car.demolished;
-      view.model.flame.visible = boosting;
+      view.model.setBoost(boosting, this.time);
       if (boosting) {
-        const s = 0.8 + Math.random() * 0.5;
-        view.model.flame.scale.set(1, s, 1);
         view.trailTimer += dt;
         const nozzle = view.model.nozzle.clone().applyQuaternion(root.quaternion).add(root.position);
         const back = new THREE.Vector3(-1, 0, 0).applyQuaternion(root.quaternion);
@@ -308,7 +277,8 @@ export class GameRenderer {
     } else if (!localView) {
       this.cam.updateOverview(dt, bp);
     }
-    this.renderer.render(this.scene, this.camera);
+    this.env.update(dt);
+    this.post.render();
   }
 
   private placeShadow(mesh: THREE.Mesh, p: { x: number; y: number; z: number }, visible: number, maxDist: number) {
