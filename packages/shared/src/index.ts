@@ -8,3 +8,5 @@ export * from './game/match.js';
 export * from './physics/car.js';
 export * from './physics/ball.js';
 export * from './physics/collisions.js';
+export * from './bot/bot.js';
+export * from './net/protocol.js';
