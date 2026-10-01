@@ -92,6 +92,14 @@ export function collideCarBall(car: CarState, ball: BallState, tick: number): Ba
   const fresh = car.lastBallTouchTick !== tick - 1;
   car.lastBallTouchTick = tick;
 
+  // Flip reset: touching the ball with the wheels (bottom of the car) while airborne gives the
+  // flip back, like the real game.
+  if (!car.onGround && vdot(hit.normal, qup(car.quat)) < -0.7) {
+    car.hasJumped = false;
+    car.hasDoubleJumped = false;
+    car.hasFlipped = false;
+  }
+
   // Separate (the ball is much lighter, so it takes most of the correction)
   const pen = BALL.RADIUS - hit.dist;
   ball.pos = vaddScaled(ball.pos, hit.normal, pen * 0.9);

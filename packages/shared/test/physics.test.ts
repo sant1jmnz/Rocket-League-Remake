@@ -216,6 +216,24 @@ describe('ball', () => {
   });
 });
 
+describe('flip reset', () => {
+  it('touching the ball with the wheels in the air gives the flip back', () => {
+    const s = freeplayWithCar();
+    const car = s.cars[0];
+    car.pos = v3(0, 0, 600);
+    car.onGround = false;
+    car.hasJumped = true;
+    car.hasDoubleJumped = true;
+    car.airTimeSinceJump = 3;
+    // just under the hitbox bottom (origin + 20.75 offset - 18.08 half height)
+    s.ball.pos = v3(CAR.HITBOX_OFFSET.x, 0, 600 + 2.67 - BALL.RADIUS + 5);
+    s.ball.vel = v3();
+    stepGame(s, () => emptyInput());
+    expect(car.hasDoubleJumped).toBe(false);
+    expect(car.hasJumped).toBe(false);
+  });
+});
+
 describe('determinism', () => {
   it('same inputs produce the same state', () => {
     const a = freeplayWithCar();
