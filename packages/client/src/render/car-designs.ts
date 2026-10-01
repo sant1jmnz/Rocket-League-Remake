@@ -92,6 +92,8 @@ interface LoftSpec {
   wBottom: (x: number) => number;
   /** super-ellipse exponent (2 = round, 6+ = boxy) */
   n: (x: number) => number;
+  /** lateral center of the section (default 0: symmetric body); used for off-center pods/fenders */
+  zc?: (x: number) => number;
   /** surface of each triangle, by its centroid */
   region?: (x: number, y: number, z: number) => Surface;
   surfaces?: Surface[];
@@ -107,6 +109,7 @@ function loft(s: LoftSpec): Part {
     const top = s.top(x);
     const bot = Math.min(s.bottom(x), top - 0.5);
     const e = 2 / s.n(x);
+    const zc = s.zc ? s.zc(x) : 0;
     for (let i = 0; i <= s.ring; i++) {
       const th = -Math.PI / 2 + (i / s.ring) * Math.PI * 2;
       const c = Math.cos(th);
@@ -115,7 +118,7 @@ function loft(s: LoftSpec): Part {
       const v = Math.sign(sn) * Math.pow(Math.abs(sn), e);
       const t = (v + 1) / 2;
       const w = s.wBottom(x) + (s.wTop(x) - s.wBottom(x)) * t;
-      pos.push(x, bot + (top - bot) * t, u * w);
+      pos.push(x, bot + (top - bot) * t, zc + u * w);
     }
   }
   const row = s.ring + 1;
@@ -135,7 +138,7 @@ function loft(s: LoftSpec): Part {
     let cy = 0;
     for (let i = 0; i <= s.ring; i++) cy += pos[(base + i) * 3 + 1];
     const center = pos.length / 3;
-    pos.push(pos[base * 3], cy / row, 0);
+    pos.push(pos[base * 3], cy / row, s.zc ? s.zc(pos[base * 3]) : 0);
     for (let i = 0; i < s.ring; i++) {
       if (flip) idx.push(center, base + i, base + i + 1);
       else idx.push(center, base + i + 1, base + i);
@@ -220,6 +223,33 @@ const mirrorZ = (p: Part): Part => {
 
 const both = (p: Part): Part[] => [p, mirrorZ(p)];
 
+/** Rounded side pod / fender (right side) between z = inner and z = outer(x). */
+function pod(o: {
+  x0: number;
+  x1: number;
+  inner: number;
+  outer: (x: number) => number;
+  top: (x: number) => number;
+  bottom: (x: number) => number;
+  n?: number;
+  surface?: Surface;
+}): Part {
+  const part = loft({
+    x0: o.x0,
+    x1: o.x1,
+    stations: 40,
+    ring: 32,
+    top: o.top,
+    bottom: o.bottom,
+    wTop: (x) => (o.outer(x) - o.inner) / 2,
+    wBottom: (x) => (o.outer(x) - o.inner) / 2,
+    zc: (x) => (o.outer(x) + o.inner) / 2,
+    n: () => o.n ?? 2.6,
+  });
+  part.surface = o.surface ?? 'paint';
+  return part;
+}
+
 const boxPart = (w: number, h: number, d: number, x: number, y: number, z: number, surface: Surface, rz = 0, ry = 0): Part => {
   const g = new THREE.BoxGeometry(w, h, d);
   if (ry) g.rotateY(ry);
@@ -257,27 +287,28 @@ const tube = (a: THREE.Vector3, b: THREE.Vector3, r: number, surface: Surface): 
 // Octane
 // ---------------------------------------------------------------------------
 
-const OCT_TOP: [number, number][] = [[-46, 25], [-30, 27], [-16, 30], [-6, 33.5], [12, 33.5], [30, 24.5], [47, 15.5], [60, 11], [70, 7], [78, 2]];
+const OCT_TOP: [number, number][] = [[-50, 22], [-44, 25], [-30, 25.5], [-22, 30], [-16, 32.5], [-6, 33.5], [8, 33.8], [16, 31.5], [24, 29], [32, 25], [40, 19.5], [48, 15], [56, 13], [64, 10.5], [72, 5.5], [78, 3]];
 
 function octane(): Design {
-  const frontR = 13.5;
-  const rearR = 15.5;
-  const fwY = -17 + frontR;
-  const rwY = -17 + rearR;
+  // Visual wheel sizes from the reference (wheel model scaled 0.75 front / 0.84 rear)
+  const frontR = 11;
+  const rearR = 12.7;
+  const fwY = -6;
+  const rwY = -4.3;
   const parts: Part[] = [];
 
   // Central fuselage: narrow nose, tall bubble canopy, rear deck with the engine bay
   const top = curve(OCT_TOP);
   parts.push(
     loft({
-      x0: -46,
+      x0: -50,
       x1: 78,
-      stations: 72,
+      stations: 80,
       ring: 56,
       top,
-      bottom: curve([[-46, -5], [-36, -9], [64, -9], [78, -5]]),
-      wTop: curve([[-46, 15], [-20, 16], [0, 15.5], [14, 14.5], [32, 13.5], [50, 12], [66, 11], [78, 8]]),
-      wBottom: curve([[-46, 20], [-30, 23.5], [0, 24], [30, 24], [48, 22], [66, 19], [78, 15]]),
+      bottom: curve([[-50, -2], [-44, -5.5], [44, -5.5], [60, -6.5], [78, -6]]),
+      wTop: curve([[-50, 15], [-20, 17], [0, 21], [10, 20], [20, 17], [32, 15], [50, 13], [66, 12], [78, 9]]),
+      wBottom: curve([[-50, 22], [-30, 25], [0, 26], [30, 25], [50, 23], [66, 19], [78, 15]]),
       n: () => 2.7,
       // Windshield on the canopy front, side windows on its flanks, dark sills
       mask:
@@ -285,62 +316,60 @@ function octane(): Design {
         glslPiecewise('topO', OCT_TOP) +
         `vec2 carMask(vec3 p) {
           float t = topO(p.x);
-          float ws = band(p.x, 13.0, 46.0, 0.4) * smoothstep(t - 6.4, t - 5.6, p.y) * (1.0 - smoothstep(12.0, 12.8, abs(p.z)));
-          float sw = band(p.x, -3.0, 28.0, 0.4) * band(p.y, 22.0, t - 1.6, 0.35) * smoothstep(8.6, 9.4, abs(p.z));
-          float tr = 1.0 - smoothstep(-6.0, -5.2, p.y);
+          float ws = band(p.x, 14.0, 44.0, 0.4) * smoothstep(t - 6.4, t - 5.6, p.y) * (1.0 - smoothstep(13.0, 13.8, abs(p.z)));
+          float sw = band(p.x, -2.0, 26.0, 0.4) * band(p.y, 21.0, t - 1.6, 0.35) * smoothstep(10.6, 11.4, abs(p.z));
+          float tr = 1.0 - smoothstep(-4.6, -3.8, p.y);
           return vec2(max(ws, sw), tr);
         }`,
     }),
   );
 
-  // Front fenders: curved blades over the front wheels, standing off the nose
-  // (low, flat blades: front tip low, highest just behind the wheel center)
-  const ff: [number, number][] = [
-    [33, 3],
-    [38, 8.5],
-    [48, 11.5],
-    [58, 11.5],
-    [67, 9],
-    [74, 4],
-    [76.5, 0.5],
-    [73, 0.5],
-    [65, 5.5],
-    [57, 8],
-    [48, 8],
-    [40, 5.5],
-    [35, 1],
-  ];
-  parts.push(...both(slab(ff, 19.5, 35, 'paint', 1.4)));
-  parts.push(...both(slab([[35, 1], [40, 5.5], [48, 8], [57, 8], [65, 5.5], [73, 0.5], [72, -0.5], [64, 4.5], [57, 7], [48, 7], [40, 4.5], [36, 0]], 21, 34.5, 'trim', 0.4)));
+  // Front fenders: thin cambered blades over the front wheels, from the cockpit sides to the nose
+  parts.push(
+    ...both(
+      pod({
+        x0: 30,
+        x1: 67,
+        inner: 19.5,
+        outer: curve([[30, 21], [34, 27], [40, 30], [48, 31], [56, 31.5], [62, 30.5], [67, 24]]),
+        top: curve([[30, 3], [36, 8], [44, 10.5], [52, 11.5], [60, 10.5], [67, 6]]),
+        bottom: curve([[30, 0.5], [36, 5], [44, 7], [52, 7.6], [60, 7], [67, 3.5]]),
+        n: 2.2,
+      }),
+    ),
+  );
 
-  // Rear side pods: big swoosh panels over the rear wheels, sweeping down to the sill
-  const rp: [number, number][] = [
-    [-52, 20],
-    [-38, 23.5],
-    [-24, 23],
-    [-12, 17],
-    [-2, 5],
-    [6, -8],
-    [-4, -9.5],
-    ...arc(-33.75, rwY, rearR + 3.5, 10, 180, 14),
-    [-52, rwY],
-  ];
-  parts.push(...both(slab(rp, 23, 36.5, 'paint', 1.8)));
-  parts.push(...both(slab([...arc(-33.75, rwY, rearR + 4, 10, 180, 14), ...arc(-33.75, rwY, rearR + 2.5, 180, 10, 14)], 26, 36, 'trim', 0.6)));
+  // Rear side pods: rounded hips over the rear wheels, widest just ahead of the axle
+  parts.push(
+    ...both(
+      pod({
+        x0: -48,
+        x1: -13,
+        inner: 20,
+        outer: curve([[-48, 30], [-44, 32.5], [-36, 34.5], [-28, 36], [-22, 36], [-17, 33], [-13, 26]]),
+        top: curve([[-48, 18.5], [-44, 21], [-36, 23], [-26, 23.8], [-20, 22.5], [-15, 19], [-13, 15]]),
+        bottom: curve([[-48, 8], [-44, 10], [-34, 11.5], [-24, 10.5], [-18, 8.5], [-13, 8]]),
+        n: 2.4,
+      }),
+    ),
+  );
+  // Dark liners under the pods and blades
+  parts.push(...both(pod({ x0: -48, x1: -16, inner: 22, outer: curve([[-48, 30], [-30, 34.5], [-16, 31]]), top: curve([[-48, 7], [-34, 12], [-16, 9]]), bottom: curve([[-48, 5.5], [-34, 10.5], [-16, 7.5]]), surface: 'trim' })));
+  parts.push(...both(pod({ x0: 33, x1: 65, inner: 21, outer: curve([[33, 26], [48, 30.5], [65, 25]]), top: curve([[33, 2], [50, 7.8], [65, 4]]), bottom: curve([[33, 1], [50, 6.8], [65, 3]]), surface: 'trim' })));
 
   // Exposed engine: dark block, two red tanks, top air scoop and exhausts
-  parts.push(boxPart(30, 9, 20, -30, 21, 0, 'trim'));
+  parts.push(boxPart(28, 7, 22, -31, 20, 0, 'trim'));
   for (const z of [-8, 8]) {
-    parts.push(cylX(4.6, 26, -30, 26.5, z, 'red'));
+    parts.push(cylX(4.4, 24, -31, 22.5, z, 'red'));
     parts.push(cylX(1.6, 10, -48, 12, z * 0.9, 'chrome'));
   }
-  parts.push(boxPart(15, 7, 15, -9, 36, 0, 'trim'));
-  parts.push(boxPart(3, 5, 12, -1.5, 36, 0, 'chrome'));
+  parts.push(boxPart(15, 6.5, 27, -8.5, 36, 0, 'trim'));
+  parts.push(boxPart(2.5, 4.5, 23, -1.2, 36, 0, 'chrome'));
   // Roof fins on the rear deck
   for (const z of [-9, -4.5, 0, 4.5, 9]) parts.push(boxPart(5, 3.5, 1.2, -16, 31.5, z, 'trim', 0.4));
 
   // Front tube bumper with round headlights and grille
-  parts.push(cylZ(1.8, 44, 77, -2.5, 0, 'trim'));
+  parts.push(cylZ(1.8, 39, 77, -2.5, 0, 'trim'));
   parts.push(cylZ(1.5, 36, 75.5, 6, 0, 'trim'));
   for (const z of [-10, 10]) parts.push(tube(new THREE.Vector3(77, -8, z), new THREE.Vector3(75.5, 6, z), 1.5, 'trim'));
   parts.push(boxPart(4, 9, 22, 74, 1, 0, 'trim'));
@@ -351,19 +380,19 @@ function octane(): Design {
 
   // Tall rear wing on a swan-neck post
   const wing = new THREE.Shape();
-  wing.moveTo(-58, 40);
-  wing.lineTo(-44, 42.5);
-  wing.lineTo(-43, 44);
-  wing.lineTo(-58, 42.2);
+  wing.moveTo(-61, 40.6);
+  wing.lineTo(-46, 41.6);
+  wing.lineTo(-45, 42.6);
+  wing.lineTo(-61, 41.8);
   wing.closePath();
-  const wg = new THREE.ExtrudeGeometry(wing, { depth: 62, bevelEnabled: true, bevelSize: 0.8, bevelThickness: 0.8, bevelSegments: 1 });
-  wg.translate(0, 0, -31);
+  const wg = new THREE.ExtrudeGeometry(wing, { depth: 57, bevelEnabled: true, bevelSize: 0.8, bevelThickness: 0.8, bevelSegments: 1 });
+  wg.translate(0, 0, -28.5);
   parts.push({ geometry: wg, surface: 'paint' });
-  for (const z of [-31.5, 31.5]) parts.push(boxPart(15, 9, 1.4, -51, 38, z, 'paint', 0.15));
+  for (const z of [-29.5, 29.5]) parts.push(boxPart(15, 6, 1.4, -53, 40, z, 'paint', 0.08));
   parts.push(tube(new THREE.Vector3(-40, 25, 0), new THREE.Vector3(-44, 36, 0), 1.6, 'trim'));
-  parts.push(tube(new THREE.Vector3(-44, 36, 0), new THREE.Vector3(-49, 41.5, 0), 1.6, 'trim'));
+  parts.push(tube(new THREE.Vector3(-44, 36, 0), new THREE.Vector3(-51, 41.5, 0), 1.6, 'trim'));
   // Tail lights on the pods
-  for (const z of [-30, 30]) parts.push(boxPart(1.5, 3, 6, -52.5, 18, z, 'tail'));
+  for (const z of [-29, 29]) parts.push(boxPart(1.5, 3, 6, -48.3, 15, z, 'tail'));
 
   return {
     parts,
@@ -372,10 +401,10 @@ function octane(): Design {
     frontW: 12,
     rearW: 15,
     wheels: [
-      { x: 51.25, y: fwY, z: 28.7, front: true },
-      { x: -33.75, y: rwY, z: 31.7, front: false },
+      { x: 51.3, y: fwY, z: 28.7, front: true },
+      { x: -34.3, y: rwY, z: 31.7, front: false },
     ],
-    nozzle: new THREE.Vector3(-47, 14, 0),
+    nozzle: new THREE.Vector3(-49, 12, 0),
   };
 }
 
@@ -383,27 +412,28 @@ function octane(): Design {
 // Fennec
 // ---------------------------------------------------------------------------
 
-const FEN_ROOF: [number, number][] = [[-59.5, 28], [-56, 33.2], [-2, 33.8], [4, 33.2], [26, 17.6]];
+const FEN_ROOF: [number, number][] = [[-57, 17], [-53, 32.2], [-2, 32.8], [4, 32.3], [26, 18]];
 
 function fennec(): Design {
-  const frontR = 14;
-  const rearR = 14.5;
-  const fwY = -17 + frontR;
-  const rwY = -17 + rearR;
+  // Visual wheel sizes from the reference (same wheel model as the Octane)
+  const frontR = 11.2;
+  const rearR = 12.7;
+  const fwY = -6.1;
+  const rwY = -4.6;
   const parts: Part[] = [];
 
   // Lower body: long flat hood, vertical nose and tail; widens towards the shoulder line
-  const hood = lin([[-61, 15], [-58, 17], [22, 18], [30, 17.5], [62, 14], [72, 12.5], [77, 11], [78.5, 8]]);
+  const hood = lin([[-60, 10], [-57.5, 16], [26, 18], [44, 18], [56, 17], [64, 16], [72, 15], [76, 13.5], [78.5, 10]]);
   parts.push(
     loft({
-      x0: -61.5,
+      x0: -60,
       x1: 78.5,
       stations: 70,
       ring: 48,
       top: hood,
-      bottom: lin([[-61.5, -6], [-59, -11], [74, -11], [78.5, -6]]),
-      wTop: lin([[-61.5, 28], [-58, 30.5], [70, 30.5], [78.5, 27]]),
-      wBottom: lin([[-61.5, 22], [-56, 23], [72, 23], [78.5, 21]]),
+      bottom: lin([[-60, -9], [-57, -12.5], [74, -12.5], [78.5, -9]]),
+      wTop: curve([[-60, 27], [-55, 31], [66, 31.5], [72, 30], [76, 25], [78.5, 21]]),
+      wBottom: curve([[-60, 23], [-55, 25], [66, 25], [72, 24], [76, 21], [78.5, 18]]),
       n: () => 7,
       mask: `vec2 carMask(vec3 p) { return vec2(0.0, 1.0 - smoothstep(-7.4, -6.6, p.y)); }`,
     }),
@@ -413,14 +443,14 @@ function fennec(): Design {
   const roof = lin(FEN_ROOF);
   parts.push(
     loft({
-      x0: -59.5,
+      x0: -57,
       x1: 26,
       stations: 60,
       ring: 48,
       top: roof,
       bottom: () => 15.5,
-      wTop: lin([[-59.5, 19], [-54, 20.5], [0, 20.5], [26, 23]]),
-      wBottom: lin([[-59.5, 27], [-54, 28], [20, 28.5], [26, 28.5]]),
+      wTop: lin([[-57, 22], [-52, 23.5], [0, 23.5], [26, 25.5]]),
+      wBottom: lin([[-57, 30], [-52, 31], [20, 31.5], [26, 31.5]]),
       n: () => 5,
       // Big windshield, side windows (B-pillar in the middle) ending at a thick C-pillar, rear glass
       mask:
@@ -428,10 +458,10 @@ function fennec(): Design {
         glslPiecewise('roofF', FEN_ROOF) +
         `vec2 carMask(vec3 p) {
           float t = roofF(p.x);
-          float ws = band(p.x, 5.0, 25.0, 0.3) * smoothstep(19.0, 19.8, p.y) * (1.0 - smoothstep(21.5, 22.3, abs(p.z))) * smoothstep(t - 6.4, t - 5.6, p.y);
-          float side = band(p.x, -37.0, 3.0, 0.35) * band(p.y, 20.0, t - 1.8, 0.35) * smoothstep(14.6, 15.4, abs(p.z));
+          float ws = band(p.x, 5.0, 25.0, 0.3) * smoothstep(19.4, 20.2, p.y) * (1.0 - smoothstep(23.5, 24.3, abs(p.z))) * smoothstep(t - 6.4, t - 5.6, p.y);
+          float side = band(p.x, -37.0, 3.0, 0.35) * band(p.y, 20.0, t - 1.8, 0.35) * smoothstep(17.6, 18.4, abs(p.z));
           float pillar = band(p.x, -18.5, -16.0, 0.3);
-          float rear = (1.0 - smoothstep(-57.4, -56.6, p.x)) * band(p.y, 20.0, 31.0, 0.35) * (1.0 - smoothstep(17.0, 17.8, abs(p.z)));
+          float rear = (1.0 - smoothstep(-54.4, -53.6, p.x)) * band(p.y, 20.0, 30.5, 0.35) * (1.0 - smoothstep(19.0, 19.8, abs(p.z)));
           return vec2(max(max(ws, side * (1.0 - pillar)), rear), side * pillar);
         }`,
     }),
@@ -439,36 +469,39 @@ function fennec(): Design {
 
   // Round flared arches + lower side skirts (body color), black liners
   for (const [cx, cy, r, z0, z1] of [
-    [48.8, fwY, frontR, 23, 33],
-    [-36.5, rwY, rearR, 24, 34],
+    [48.8, fwY, frontR, 24.5, 34.2],
+    [-36.5, rwY, rearR, 25.5, 35.6],
   ] as const) {
     const outline: [number, number][] = [...arc(cx, cy, r + 4, -8, 188, 20), ...arc(cx, cy, r + 1.6, 188, -8, 20)];
     parts.push(...both(slab(outline, z0, z1, 'paint', 1.2)));
     parts.push(...both(slab([...arc(cx, cy, r + 2, -8, 188, 18), ...arc(cx, cy, r + 1.2, 188, -8, 18)], z0 + 2, z1, 'trim', 0.4)));
   }
   // Sill panel between the wheels with a black lower strip and side vents
-  parts.push(...both(slab([[-17, -10], [28, -10], [28, 9], [-17, 9]], 27, 32.5, 'paint', 1.2)));
-  parts.push(...both(boxPart(46, 2.5, 1.2, 5, -7.5, 32.6, 'trim')));
-  parts.push(...both(slab([[17, 0], [21, 0], [23, 13], [19, 13]], 30.8, 32.8, 'trim', 0.3)));
-  parts.push(...both(slab([[-16, -2], [-12, -2], [-10, 12], [-14, 12]], 30.8, 32.8, 'trim', 0.3)));
+  parts.push(...both(slab([[-21, -12], [33, -12], [33, 8], [-21, 8]], 28.5, 33.5, 'paint', 1.2)));
+  parts.push(...both(boxPart(52, 2.5, 1.2, 6, -9.5, 33.6, 'trim')));
+  parts.push(...both(slab([[22, -2], [26, -2], [28, 11], [24, 11]], 32.4, 34, 'trim', 0.3)));
+  parts.push(...both(slab([[-19, -4], [-15, -4], [-13, 10], [-17, 10]], 32.4, 34, 'trim', 0.3)));
 
   // Front: wide dark grille, round headlights, low bumper, hood bulge
   parts.push(boxPart(2.5, 9, 30, 78, 3.5, 0, 'trim'));
   for (let i = 0; i < 4; i++) parts.push(boxPart(2.8, 0.8, 26, 78.2, 0.5 + i * 2.2, 0, 'chrome'));
-  for (const z of [-22, 22]) {
-    parts.push(cylX(4.6, 2.5, 77.6, 4, z, 'trim'));
-    parts.push(cylX(3.6, 3, 78, 4, z, 'light'));
-    parts.push(boxPart(2.5, 2.4, 4, 78, 4, z * 0.75, 'accent'));
+  for (const z of [-21, 21]) {
+    parts.push(cylX(4.6, 2.5, 77.4, 5, z, 'trim'));
+    parts.push(cylX(3.6, 3, 77.8, 5, z, 'light'));
+    parts.push(boxPart(2.5, 2.4, 3.5, 78, 5, z * 0.78, 'accent'));
   }
-  parts.push(boxPart(5, 5, 60, 76.5, -8.5, 0, 'trim'));
-  parts.push(slab([[34, 17.4], [66, 13.6], [66, 15.6], [40, 19.6]], -9, 9, 'paint', 1.2));
-  parts.push(boxPart(8, 1.2, 9, 42, 19.4, 0, 'trim', -0.12));
+  // Low bumper that wraps around the rounded front corners
+  parts.push(boxPart(5, 5, 42, 76.5, -9, 0, 'trim'));
+  for (const z of [-26, 26]) parts.push(boxPart(9, 5, 9, 72.5, -9, z, 'trim', 0, z > 0 ? -0.6 : 0.6));
+  // Subtle hood bulge with a vent
+  parts.push(slab([[34, 17.9], [66, 15.9], [66, 16.8], [40, 18.8]], -9, 9, 'paint', 0.6));
+  parts.push(boxPart(8, 1, 9, 44, 18.6, 0, 'trim', -0.08));
 
   // Rear: light bar, bumper, roof spoiler
-  parts.push(boxPart(1.5, 3.5, 52, -61.8, 11, 0, 'tail'));
-  parts.push(boxPart(4, 6, 58, -60.5, -6, 0, 'trim'));
-  parts.push(boxPart(13, 2, 40, -55, 35, 0, 'paint', -0.14));
-  for (const z of [-17, 17]) parts.push(boxPart(4, 3, 1.5, -53, 34, z, 'trim'));
+  parts.push(boxPart(1.5, 3.5, 48, -60.3, 7, 0, 'tail'));
+  parts.push(boxPart(4, 6, 52, -59.5, -8, 0, 'trim'));
+  parts.push(boxPart(9, 1.6, 44, -52.5, 33.3, 0, 'paint', -0.18));
+  for (const z of [-19, 19]) parts.push(boxPart(3, 2.4, 1.5, -51, 32.4, z, 'trim'));
 
   return {
     parts,
@@ -480,7 +513,7 @@ function fennec(): Design {
       { x: 48.8, y: fwY, z: 30.7, front: true },
       { x: -36.5, y: rwY, z: 31.8, front: false },
     ],
-    nozzle: new THREE.Vector3(-60, 2, 0),
+    nozzle: new THREE.Vector3(-60.5, 0, 0),
   };
 }
 
