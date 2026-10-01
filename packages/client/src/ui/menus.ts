@@ -1,4 +1,4 @@
-import { TEAM_NAMES, type BotDifficulty, type RoomInfo, type Team, type TeamSize } from '@rl/shared';
+import { TEAM_NAMES, matchMvp, type BotDifficulty, type GameState, type RoomInfo, type Team, type TeamSize } from '@rl/shared';
 import { ACTION_LABELS, DEFAULT_KEYS, DEFAULT_PAD, PAD_BUTTON_NAMES, keyLabel, type Action } from '../input/bindings';
 import type { InputManager } from '../input/manager';
 import { DEFAULT_CAMERA } from '../camera/camera';
@@ -290,15 +290,38 @@ export class Menus {
     this.mount('pause', node);
   }
 
-  showMatchEnd(text: string, offline: boolean) {
-    const node = this.panel(
-      text,
-      `<div class="menu-list">
+  /** Post-match results: winner, final score and every player's stats with the MVP marked. */
+  showMatchEnd(state: GameState, localCarId: number | null, offline: boolean) {
+    const local = state.cars.find((c) => c.id === localCarId);
+    const winner = state.winner === -1 ? 0 : state.winner;
+    const won = local ? local.team === winner : null;
+    const title = won === null ? `Gana ${TEAM_NAMES[winner]}` : won ? 'Victoria' : 'Derrota';
+    const mvp = matchMvp(state);
+    const rows = (team: 0 | 1) =>
+      state.cars
+        .filter((c) => c.team === team)
+        .sort((a, b) => b.stats.score - a.stats.score)
+        .map(
+          (c) => `<tr class="${c.id === localCarId ? 'me' : ''}">
+            <td>${c.id === mvp ? '<span class="mvp">MVP</span>' : ''}${esc(c.name)}${c.isBot ? ' <small>BOT</small>' : ''}</td>
+            <td>${c.stats.score}</td><td>${c.stats.goals}</td><td>${c.stats.assists}</td><td>${c.stats.saves}</td><td>${c.stats.shots}</td><td>${c.stats.demos}</td></tr>`,
+        )
+        .join('');
+    const table = (team: 0 | 1) => `<div class="board-team t${team}">
+        <div class="board-head"><span>${TEAM_NAMES[team]}${team === winner ? ' <small class="win-tag">GANADOR</small>' : ''}</span><span>${state.score[team]}</span></div>
+        <table><thead><tr><th>Jugador</th><th>Puntos</th><th>Goles</th><th>Asist.</th><th>Atajadas</th><th>Tiros</th><th>Demos</th></tr></thead><tbody>${rows(team)}</tbody></table>
+      </div>`;
+    const node = h(`<div class="panel results ${won === null ? '' : won ? 'won' : 'lost'}">
+      <div class="results-head">
+        <div class="results-title t${winner}">${title}</div>
+        <div class="results-score"><span class="t0">${state.score[0]}</span><span class="dash">–</span><span class="t1">${state.score[1]}</span>${state.overtime ? '<small>TIEMPO EXTRA</small>' : ''}</div>
+      </div>
+      <div class="board results-board">${table(0)}${table(1)}</div>
+      <div class="menu-list row">
         ${offline ? '<button class="btn big" data-a="restart">Jugar otra vez</button>' : '<div class="hint">Volviendo a la sala…</div>'}
         <button class="btn" data-a="quit">Salir al menú</button>
-      </div>`,
-      false,
-    );
+      </div>
+    </div>`);
     node.querySelector('[data-a=restart]')?.addEventListener('click', () => this.cb.restartOffline());
     node.querySelector('[data-a=quit]')!.addEventListener('click', () => this.cb.quitToMenu());
     this.mount('end', node);

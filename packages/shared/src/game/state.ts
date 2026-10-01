@@ -91,7 +91,7 @@ export interface BallState {
   angVel: Vec3;
 }
 
-export type MatchPhase = 'countdown' | 'playing' | 'goal' | 'ended' | 'freeplay';
+export type MatchPhase = 'countdown' | 'playing' | 'goal' | 'replay' | 'ended' | 'freeplay';
 
 export interface TouchRecord {
   carId: number;
@@ -120,6 +120,8 @@ export interface GameState {
   /** which goal the ball was predicted to enter before the last touch (-1/1, 0 = none) */
   ballGoalPrediction: number;
   lastGoal: { team: Team; scorerId: number; assistId: number; speed: number } | null;
+  /** ids of the human players that voted to skip the current goal replay */
+  replaySkips: number[];
   winner: Team | -1;
   freeplay: boolean;
   unlimitedBoost: boolean;
@@ -205,6 +207,7 @@ export function createGameState(opts: GameOptions = {}): GameState {
     lastTouches: [],
     ballGoalPrediction: 0,
     lastGoal: null,
+    replaySkips: [],
     winner: -1,
     freeplay: !!opts.freeplay,
     unlimitedBoost: !!opts.unlimitedBoost,

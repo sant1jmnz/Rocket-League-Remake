@@ -86,7 +86,7 @@ export function quantizeInput(i: ControllerInput): ControllerInput {
 // Binary snapshot codec (exact float64 so client re-simulation matches the server)
 // ---------------------------------------------------------------------------
 
-const PHASES: MatchPhase[] = ['countdown', 'playing', 'goal', 'ended', 'freeplay'];
+const PHASES: MatchPhase[] = ['countdown', 'playing', 'goal', 'ended', 'freeplay', 'replay'];
 
 class Writer {
   buf: ArrayBuffer;
@@ -162,6 +162,8 @@ export function encodeSnapshot(s: GameState, inputLead: number): Uint8Array {
   if (s.lastGoal) {
     w.u8(1); w.u8(s.lastGoal.team); w.i16(s.lastGoal.scorerId); w.i16(s.lastGoal.assistId); w.f64(s.lastGoal.speed);
   } else w.u8(0);
+  w.u8(s.replaySkips.length);
+  for (const id of s.replaySkips) w.u16(id);
   // ball
   writeVec(w, s.ball.pos); writeVec(w, s.ball.vel); writeVec(w, s.ball.angVel);
   // pads
@@ -220,6 +222,8 @@ export function decodeSnapshot(data: ArrayBuffer | Uint8Array, names: Record<num
   for (let i = 0; i < nt; i++) lastTouches.push({ carId: r.u16(), team: r.u8() as Team, time: r.f64() });
   let lastGoal: GameState['lastGoal'] = null;
   if (r.u8()) lastGoal = { team: r.u8() as Team, scorerId: r.i16(), assistId: r.i16(), speed: r.f64() };
+  const replaySkips: number[] = [];
+  for (let i = r.u8(); i > 0; i--) replaySkips.push(r.u16());
   const ball = { pos: readVec(r), vel: readVec(r), angVel: readVec(r) };
   const np = r.u8();
   const pads: number[] = [];
@@ -266,7 +270,7 @@ export function decodeSnapshot(data: ArrayBuffer | Uint8Array, names: Record<num
     waitingForBallGround: (fl & 4) !== 0,
     freeplay: (fl & 8) !== 0,
     unlimitedBoost: (fl & 16) !== 0,
-    phase, phaseTimer, lastTouches, ballGoalPrediction, lastGoal, winner, rngSeed,
+    phase, phaseTimer, lastTouches, ballGoalPrediction, lastGoal, replaySkips, winner, rngSeed,
   };
   return { tick, inputLead, state };
 }

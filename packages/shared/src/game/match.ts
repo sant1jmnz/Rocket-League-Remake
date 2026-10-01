@@ -39,7 +39,9 @@ export type GameEvent =
   | { type: 'matchEnd'; winner: Team }
   | { type: 'shot'; carId: number }
   | { type: 'save'; carId: number }
-  | { type: 'respawn'; carId: number };
+  | { type: 'respawn'; carId: number }
+  | { type: 'replayStart' }
+  | { type: 'replaySkipVote'; carId: number };
 
 export type InputSource = (car: CarState) => ControllerInput;
 
@@ -161,7 +163,29 @@ export function stepGame(state: GameState, getInput: InputSource): GameEvent[] {
     if (state.phaseTimer <= 0) state.phase = 'playing';
   } else if (state.phase === 'goal') {
     state.phaseTimer -= dt;
-    if (state.phaseTimer <= 0) afterGoal(state, events);
+    if (state.phaseTimer <= 0) {
+      if (state.freeplay) afterGoal(state, events);
+      else startReplay(state, events);
+    }
+  } else if (state.phase === 'replay') {
+    // The world is frozen while the replay plays; players vote to skip it by pressing jump
+    state.phaseTimer -= dt;
+    const humans = state.cars.filter((c) => !c.isBot);
+    for (const car of humans) {
+      // a fresh press counts (holding jump from before the replay does not)
+      const jump = getInput(car).jump;
+      if (jump && !car.lastInput.jump && !state.replaySkips.includes(car.id)) {
+        state.replaySkips.push(car.id);
+        events.push({ type: 'replaySkipVote', carId: car.id });
+      }
+      car.lastInput = { ...car.lastInput, jump };
+    }
+    const allSkipped = humans.length > 0 && humans.every((c) => state.replaySkips.includes(c.id));
+    if (state.phaseTimer <= 0 || allSkipped) {
+      state.replaySkips = [];
+      afterGoal(state, events);
+    }
+    return events;
   }
 
   const frozen = state.phase === 'countdown';
@@ -335,6 +359,13 @@ function scoreGoal(state: GameState, team: Team, events: GameEvent[]): void {
   events.push({ type: 'goal', team, scorerId, assistId, speed, pos });
 }
 
+function startReplay(state: GameState, events: GameEvent[]): void {
+  state.phase = 'replay';
+  state.phaseTimer = MATCH.REPLAY;
+  state.replaySkips = [];
+  events.push({ type: 'replayStart' });
+}
+
 function afterGoal(state: GameState, events: GameEvent[]): void {
   if (state.freeplay) {
     state.ball = createBall();
@@ -363,6 +394,15 @@ function endOfRegulation(state: GameState, events: GameEvent[]): void {
   state.clock = 0;
   resetKickoff(state);
   events.push({ type: 'overtime' }, { type: 'kickoffReset' });
+}
+
+/** MVP as in the real game: the highest scorer of the winning team (ties: more goals, then id). */
+export function matchMvp(state: GameState): number | null {
+  if (state.winner === -1) return null;
+  const team = state.cars.filter((c) => c.team === state.winner);
+  if (!team.length) return null;
+  team.sort((a, b) => b.stats.score - a.stats.score || b.stats.goals - a.stats.goals || a.id - b.id);
+  return team[0].id;
 }
 
 function endMatch(state: GameState, events: GameEvent[]): void {

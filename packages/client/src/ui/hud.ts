@@ -33,6 +33,8 @@ export class Hud {
   private ballCamTag = el('div', 'ballcam-tag');
   private statusTag = el('div', 'status-tag');
   private speedTag = el('div', 'speed-tag');
+  private replayTag = el('div', 'replay-tag hidden');
+  private replaySkip = el('div', 'replay-skip hidden');
   private messageTimer = 0;
   private lastPhase = '';
 
@@ -53,7 +55,7 @@ export class Hud {
     </svg>`;
     this.boostRing = this.boostWrap.querySelector('circle.fill')!;
     this.boostWrap.append(this.boostValue);
-    this.root.append(top, this.center, this.sub, this.feed, this.board, this.boostWrap, this.ballCamTag, this.statusTag, this.speedTag, this.chatMenu);
+    this.root.append(top, this.center, this.sub, this.feed, this.board, this.boostWrap, this.ballCamTag, this.statusTag, this.speedTag, this.chatMenu, this.replayTag, this.replaySkip);
   }
 
   show(v: boolean) {
@@ -69,6 +71,24 @@ export class Hud {
   }
 
   private chatMenu = el('div', 'chat-menu hidden');
+
+  /** Goal replay overlay (null hides it). `skipKey` names the jump binding. */
+  setReplay(info: { scorer: string; team: 0 | 1; kph: number; votes: number; needed: number; voted: boolean; skipKey: string } | null) {
+    this.root.classList.toggle('replaying', !!info);
+    if (!info) {
+      this.replayTag.className = 'replay-tag hidden';
+      this.replaySkip.className = 'replay-skip hidden';
+      return;
+    }
+    this.replayTag.className = `replay-tag t${info.team}`;
+    const html = `<div class="rt-title">REPETICIÓN</div><div class="rt-sub">${escapeHtml(info.scorer)} · ${info.kph} km/h</div>`;
+    if (this.replayTag.innerHTML !== html) this.replayTag.innerHTML = html;
+    this.replaySkip.className = `replay-skip${info.voted ? ' voted' : ''}`;
+    const skip = info.voted
+      ? `Esperando a los demás · ${info.votes}/${info.needed}`
+      : `<b>${escapeHtml(info.skipKey)}</b> para omitir${info.needed > 1 ? ` · ${info.votes}/${info.needed}` : ''}`;
+    if (this.replaySkip.innerHTML !== skip) this.replaySkip.innerHTML = skip;
+  }
 
   /** Quick chat: shows the options of a category (or hides with null). */
   showChatMenu(title: string | null, options: string[] = []) {
@@ -180,7 +200,7 @@ export class Hud {
       this.lastPhase = state.phase;
     }
 
-    this.board.classList.toggle('hidden', !ui.scoreboard && state.phase !== 'ended');
+    this.board.classList.toggle('hidden', !ui.scoreboard); // results get their own screen when the match ends
     if (!this.board.classList.contains('hidden')) this.renderBoard(state, localCarId);
   }
 

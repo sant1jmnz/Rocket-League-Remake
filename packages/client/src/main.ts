@@ -5,7 +5,7 @@ import '@fontsource/titillium-web/400.css';
 import '@fontsource/titillium-web/600.css';
 import '@fontsource/titillium-web/700.css';
 import './styles.css';
-import { emptyInput, type ServerMessage, type Team, type TeamSize } from '@rl/shared';
+import { MATCH, emptyInput, type ServerMessage, type Team, type TeamSize } from '@rl/shared';
 import { GameRenderer } from './render/renderer';
 import { InputManager } from './input/manager';
 import { GameAudio } from './audio/audio';
@@ -15,6 +15,8 @@ import { defaultServerUrl, loadSettings, saveSettings } from './ui/settings';
 import { OfflineSession, type Session } from './game/session';
 import { NetClient, OnlineSession } from './net/online';
 import { QuickChat } from './game/quickchat';
+import { ReplayDirector } from './game/replay';
+import { keyLabel } from './input/bindings';
 
 const canvas = document.querySelector<HTMLCanvasElement>('#game')!;
 const overlay = document.querySelector<HTMLDivElement>('#overlay')!;
@@ -30,6 +32,8 @@ let session: Session | null = null;
 let net: NetClient | null = null;
 let paused = false;
 const quickChat = new QuickChat();
+let replay = new ReplayDirector();
+let replayCam: boolean | null = null; // user's ball-cam setting while a replay overrides it
 let endShown = false;
 let pendingRoomCode: string | null = new URLSearchParams(location.search).get('sala');
 
@@ -44,6 +48,8 @@ function applySettings() {
 }
 
 function endSession() {
+  replay = new ReplayDirector();
+  stopReplayView();
   session?.dispose();
   session = null;
   paused = false;
@@ -51,6 +57,14 @@ function endSession() {
   menus.setInGame(false);
   hud.show(false);
   renderer.cam.reset();
+}
+
+function stopReplayView() {
+  if (replayCam === null) return;
+  renderer.cam.ballCam = replayCam;
+  replayCam = null;
+  renderer.cam.reset();
+  hud.setReplay(null);
 }
 
 async function ensureNet(): Promise<NetClient> {
@@ -206,19 +220,50 @@ function loop(now: number) {
     const events = session.frame(dt, controls);
     const { prev, curr } = session.view();
     const local = curr.cars.find((c) => c.id === session!.localCarId) ?? null;
-    renderer.handleEvents(events, curr, session.localCarId);
+    const frameDt = paused && session.kind === 'offline' ? 0 : dt;
+    const bodyOf = (id: number) => session!.bodyOf(id);
+    replay.handleEvents(events, curr);
+    replay.record(curr);
+    const rp = replay.frame(curr);
+    if (rp) {
+      // Goal replay: show the recorded moments with the camera on the scorer
+      if (replayCam === null) {
+        replayCam = renderer.cam.ballCam;
+        renderer.cam.ballCam = true;
+        renderer.cam.reset();
+      }
+      if (rp.goalEvent) {
+        renderer.handleEvents([rp.goalEvent], rp.curr, rp.focusCarId);
+        audio.handleEvents([rp.goalEvent], rp.focusCarId);
+      }
+      renderer.render(rp.prev, rp.curr, rp.alpha, frameDt, { localCarId: rp.focusCarId, showNames: true, bodyOf }, { x: 0, y: 0 });
+      const scorer = rp.curr.cars.find((c) => c.id === rp.focusCarId);
+      const humans = curr.cars.filter((c) => !c.isBot);
+      hud.setReplay({
+        scorer: scorer?.name ?? 'Gol',
+        team: rp.goal.team,
+        kph: Math.round(rp.goal.speed * 0.036),
+        votes: curr.replaySkips.length,
+        needed: humans.length,
+        voted: session.localCarId !== null && curr.replaySkips.includes(session.localCarId),
+        skipKey: `${keyLabel(input.settings.keys.jump?.[0] ?? 'Mouse2')} / A`,
+      });
+    } else {
+      stopReplayView();
+      renderer.handleEvents(events, curr, session.localCarId);
+      renderer.render(prev, curr, session.alpha, frameDt, { localCarId: session.localCarId, showNames: settings.showNames, bodyOf }, ui.swivel);
+    }
     hud.handleEvents(events, curr, session.localCarId);
     audio.handleEvents(events, session.localCarId);
-    renderer.render(prev, curr, session.alpha, paused && session.kind === 'offline' ? 0 : dt, { localCarId: session.localCarId, showNames: settings.showNames, bodyOf: (id) => session!.bodyOf(id) }, ui.swivel);
     hud.update(dt, curr, session.localCarId, { scoreboard: ui.scoreboardHeld, ballCam: renderer.cam.ballCam, status: session.status() });
-    audio.updateCar(paused ? null : local);
+    audio.updateCar(paused || rp ? null : local);
 
-    if (curr.phase === 'ended' && !endShown && session.kind === 'offline') {
+    if (curr.phase === 'ended' && !endShown) {
       endShown = true;
-      const won = local && local.team === curr.winner;
+      const shown = session;
       setTimeout(() => {
-        if (session && curr.phase === 'ended') menus.showMatchEnd(won ? '¡Victoria!' : 'Derrota', true);
-      }, 3000);
+        if (session === shown && session.state.phase === 'ended') menus.showMatchEnd(session.state, session.localCarId, session.kind === 'offline');
+      }, MATCH.END_DELAY * 1000);
     }
   } else {
     renderer.renderShowcase(dt, settings.carBody, previewTeam);

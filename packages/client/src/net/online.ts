@@ -288,7 +288,7 @@ function emptyState(): GameState {
   return {
     tick: 0, time: 0, cars: [], ball: { pos: { x: 0, y: 0, z: 93 }, vel: { x: 0, y: 0, z: 0 }, angVel: { x: 0, y: 0, z: 0 } },
     pads: [], score: [0, 0], clock: 300, clockRunning: false, overtime: false, phase: 'countdown', phaseTimer: 3,
-    waitingForBallGround: false, lastTouches: [], ballGoalPrediction: 0, lastGoal: null, winner: -1,
+    waitingForBallGround: false, lastTouches: [], ballGoalPrediction: 0, lastGoal: null, replaySkips: [], winner: -1,
     freeplay: false, unlimitedBoost: false, rngSeed: 0,
   };
 }

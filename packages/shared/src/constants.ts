@@ -187,6 +187,10 @@ export const MATCH = {
   DURATION: 300,
   COUNTDOWN: 3,
   GOAL_CELEBRATION: 3,
+  /** Goal replay after the celebration (skippable when every player presses jump) */
+  REPLAY: 5.5,
+  /** The replay starts this long before the goal (the rest shows the explosion) */
+  REPLAY_LEAD: 4.5,
   /** Time after the final buzzer before showing results */
   END_DELAY: 3,
   /** Points (scoreboard) */
