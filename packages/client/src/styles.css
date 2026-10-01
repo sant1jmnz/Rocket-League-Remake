@@ -232,3 +232,11 @@ table.controls td { padding: 4px 8px; border-top: 1px solid var(--line); }
 .board .win-tag { font-size: 12px; letter-spacing: 2px; padding: 2px 8px; margin-left: 10px; background: rgba(255,255,255,.18); vertical-align: middle; }
 .board .mvp { display: inline-block; font-family: var(--display); font-style: italic; font-weight: 900; font-size: 11px; letter-spacing: 1px; color: #1b1300; background: linear-gradient(180deg, #ffe680, #ffb300); padding: 1px 7px; margin-right: 8px; transform: skewX(-10deg); }
 .menu-list.row { flex-direction: row; gap: 12px; align-items: center; }
+@media (max-height: 640px) {
+  .panel.results { padding: 14px 20px; }
+  .results-title { font-size: 42px; }
+  .results-score { font-size: 36px; }
+  .results-board .board-head { font-size: 20px; padding: 4px 14px; }
+  .results-board td { padding: 4px 14px; }
+  .board.results-board { margin-bottom: 10px; }
+}
