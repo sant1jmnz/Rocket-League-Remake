@@ -48,9 +48,11 @@ sirve aparte, en **Ajustes → Servidor** se puede poner la URL `wss://…/ws`.
 
 ## Autos y gráficos
 
-- **Octane** y **Fennec** modelados por código (carrocería lofteada con secciones superelípticas,
-  pintura clearcoat, guardabarros, alerones, faros con bloom). Los dos usan la hitbox Octane, como en
-  el juego. Se eligen en **Garaje** y se ven online.
+- **Octane** y **Fennec** reconstruidos por código a partir de proporciones medidas (vistas
+  ortogonales con grilla en uu): el Octane con fuselaje angosto, cabina burbuja, guardabarros tipo
+  aleta, paneles traseros, motor expuesto y alerón sobre poste; el Fennec como hatchback con capó
+  largo, techo recto, cola vertical, arcos redondos y parrilla con faros redondos. Ventanas con
+  máscara por píxel. Los dos usan la hitbox Octane, como en el juego. Se eligen en **Garaje**.
 - Estadio estilo DFH: pasto con franjas, rampas, franja LED por equipo, paredes de vidrio, arcos con
   red hexagonal, tribunas de dos niveles con público, carteles LED y techo con reflectores.
 - Iluminación HDR (Poly Haven «Quarry 01», CC0), sombras, bloom y tipografías Exo 2 / Titillium Web

@@ -124,7 +124,7 @@ export class Menus {
     };
     const bodies = [
       { id: 'octane', name: 'Octane', desc: 'Hitbox Octane · el más usado' },
-      { id: 'fennec', name: 'Fennec', desc: 'Hitbox Octane · forma cuadrada' },
+      { id: 'fennec', name: 'Fennec', desc: 'Hitbox Octane · hatchback' },
     ] as const;
     const node = h(`<div class="garage">
       <div class="panel-title">Garaje</div>
