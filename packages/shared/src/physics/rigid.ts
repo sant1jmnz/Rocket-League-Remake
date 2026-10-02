@@ -187,14 +187,19 @@ export function makeContact(
 /** Solves a set of contacts on velocities (10 iterations, like Bullet's default). */
 export function solveContacts(contacts: Contact[], iterations = 10): void {
   if (contacts.length === 0) return;
+  const n = contacts.length;
   for (let it = 0; it < iterations; it++) {
-    for (const c of contacts) {
+    // alternate the sweep direction (symmetric Gauss-Seidel) so no body is favored by its order
+    const rev = (it & 1) === 1;
+    for (let k = 0; k < n; k++) {
+      const c = contacts[rev ? n - 1 - k : k];
       const vn = vdot(relVel(c), c.n);
       const newJ = Math.max(0, c.jn + (c.target - vn) / c.kN);
       applyPair(c, c.n, newJ - c.jn);
       c.jn = newJ;
     }
-    for (const c of contacts) {
+    for (let k = 0; k < n; k++) {
+      const c = contacts[rev ? n - 1 - k : k];
       if (c.jn <= 0 || c.friction <= 0) continue;
       const lim = c.friction * c.jn;
       const rv = relVel(c);

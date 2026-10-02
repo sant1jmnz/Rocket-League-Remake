@@ -103,7 +103,7 @@ export interface CarModel {
   root: THREE.Group;
   body: THREE.Group;
   bodyType: CarBody;
-  wheels: { mesh: THREE.Object3D; front: boolean; radius: number }[];
+  wheels: { mesh: THREE.Object3D; front: boolean; radius: number; baseY: number }[];
   flame: THREE.Group;
   nozzle: THREE.Vector3;
   setTeam(team: 0 | 1): void;
@@ -195,7 +195,7 @@ export function createCarModel(team: 0 | 1, bodyType: CarBody = 'octane'): CarMo
       spin.traverse((o) => (o.castShadow = true));
       pivot.add(spin);
       root.add(pivot);
-      wheels.push({ mesh: pivot, front: w.front, radius: r });
+      wheels.push({ mesh: pivot, front: w.front, radius: r, baseY: w.y });
     }
   }
 
