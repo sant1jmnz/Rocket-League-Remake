@@ -8,6 +8,8 @@ export * from './game/match.js';
 export * from './physics/car.js';
 export * from './physics/ball.js';
 export * from './physics/collisions.js';
+export * from './physics/rigid.js';
+export * from './physics/world.js';
 export * from './bot/bot.js';
 export * from './net/protocol.js';
 export * from './net/quickchat.js';

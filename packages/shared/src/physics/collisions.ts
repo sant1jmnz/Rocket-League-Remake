@@ -8,6 +8,7 @@ import {
   BUMP_VEL_AIR,
   BUMP_VEL_GROUND,
   CAR,
+  MATERIAL,
 } from '../constants.js';
 import type { BallState, CarState } from '../game/state.js';
 import {
@@ -17,7 +18,6 @@ import {
   qrotate,
   qup,
   vadd,
-  vaddScaled,
   vdot,
   vlen,
   vnorm,
@@ -26,21 +26,26 @@ import {
   v3,
   type Vec3,
 } from '../math/vec.js';
-import { BALL_PROPS } from './ball.js';
-import { CAR_PROPS, hitboxCenter } from './car.js';
-import { resolveContact } from './rigid.js';
+import { hitboxCenter } from './car.js';
+import { ballBody, carBody, makeContact, type Contact } from './rigid.js';
 
 const H = CAR.HITBOX_HALF;
 
-export interface BallHit {
-  carId: number;
+// ---------------------------------------------------------------------------
+// Car vs ball (RocketSim Ball::_OnHit)
+// ---------------------------------------------------------------------------
+
+export interface CarBallContact {
+  contact: Contact;
+  normal: Vec3;
+  depth: number;
   /** relative speed at contact */
   strength: number;
-  /** first tick of this touch (not a continuous dribble contact) */
-  fresh: boolean;
+  /** contact point on the car, in car space */
+  localPoint: Vec3;
 }
 
-/** Closest point on the car hitbox to a world point, plus the hitbox-local data. */
+/** Closest point on the car hitbox to a world point. */
 function closestOnHitbox(car: CarState, p: Vec3): { point: Vec3; normal: Vec3; dist: number } {
   const c = hitboxCenter(car);
   const l = qinvRotate(car.quat, vsub(p, c));
@@ -52,11 +57,7 @@ function closestOnHitbox(car: CarState, p: Vec3): { point: Vec3; normal: Vec3; d
     const local = v3(cx, cy, cz);
     const d = vsub(l, local);
     const dist = vlen(d);
-    return {
-      point: vadd(c, qrotate(car.quat, local)),
-      normal: qrotate(car.quat, vscale(d, 1 / dist)),
-      dist,
-    };
+    return { point: vadd(c, qrotate(car.quat, local)), normal: qrotate(car.quat, vscale(d, 1 / dist)), dist };
   }
   // Center inside the box: push out through the nearest face
   const fx = H.x - Math.abs(l.x);
@@ -74,78 +75,74 @@ function closestOnHitbox(car: CarState, p: Vec3): { point: Vec3; normal: Vec3; d
     n = v3(0, 0, Math.sign(l.z) || 1);
     local = v3(l.x, l.y, n.z * H.z);
   }
+  return { point: vadd(c, qrotate(car.quat, local)), normal: qrotate(car.quat, n), dist: -Math.min(fx, fy, fz) };
+}
+
+/** Detects a car-ball contact. `normal` points from the car towards the ball. */
+export function carBallContact(car: CarState, ball: BallState, margin = 0): CarBallContact | null {
+  if (car.demolished) return null;
+  if (vlen(vsub(ball.pos, car.pos)) > BALL.RADIUS + 130 + margin) return null;
+  const hit = closestOnHitbox(car, ball.pos);
+  if (hit.dist >= BALL.RADIUS + margin) return null;
+  const contact = makeContact(
+    ballBody(ball),
+    carBody(car),
+    hit.point,
+    hit.normal,
+    MATERIAL.CAR_BALL.friction,
+    MATERIAL.CAR_BALL.restitution,
+    Math.max(0, hit.dist - BALL.RADIUS),
+  );
   return {
-    point: vadd(c, qrotate(car.quat, local)),
-    normal: qrotate(car.quat, n),
-    dist: -Math.min(fx, fy, fz),
+    contact,
+    normal: hit.normal,
+    depth: BALL.RADIUS - hit.dist,
+    strength: vlen(vsub(ball.vel, car.vel)),
+    localPoint: qinvRotate(car.quat, vsub(hit.point, car.pos)),
   };
 }
 
-export function collideCarBall(car: CarState, ball: BallState, tick: number): BallHit | null {
-  if (car.demolished) return null;
-  // Broad phase
-  if (vlen(vsub(ball.pos, car.pos)) > BALL.RADIUS + 120) return null;
-  const hit = closestOnHitbox(car, ball.pos);
-  if (hit.dist >= BALL.RADIUS) return null;
-
-  const relVelBefore = vsub(ball.vel, car.vel);
-  const fresh = car.lastBallTouchTick !== tick - 1;
-  car.lastBallTouchTick = tick;
-
-  // Flip reset: touching the ball with the wheels (bottom of the car) while airborne gives the
-  // flip back, like the real game.
-  if (!car.onGround && vdot(hit.normal, qup(car.quat)) < -0.7) {
-    car.hasJumped = false;
-    car.hasDoubleJumped = false;
-    car.hasFlipped = false;
-  }
-
-  // Separate (the ball is much lighter, so it takes most of the correction)
-  const pen = BALL.RADIUS - hit.dist;
-  ball.pos = vaddScaled(ball.pos, hit.normal, pen * 0.9);
-  car.pos = vaddScaled(car.pos, hit.normal, -pen * 0.1);
-
-  // Physical impulse (car-ball friction is high in RL)
-  resolveContact(ball, BALL_PROPS, car, CAR_PROPS(car), hit.point, hit.normal, 0, 2);
-
-  // Psyonix extra impulse (only on the first tick of a touch)
-  if (fresh) {
-    const relSpeed = Math.min(vlen(relVelBefore), BALL_HIT_MAX_REL_SPEED);
-    if (relSpeed > 0) {
-      const fwd = qforward(car.quat);
-      let dir = vsub(ball.pos, car.pos);
-      dir = vnorm(v3(dir.x, dir.y, dir.z * BALL_HIT_Z_SCALE));
-      dir = vnorm(vsub(dir, vscale(fwd, vdot(dir, fwd) * (1 - BALL_HIT_FORWARD_SCALE))));
-      ball.vel = vaddScaled(ball.vel, dir, relSpeed * curve(BALL_HIT_SCALE, relSpeed));
-    }
-  }
-  return { carId: car.id, strength: vlen(relVelBefore), fresh };
+/**
+ * Psyonix's extra hit impulse (at most every other tick while touching). Returns the velocity
+ * to add to the ball at the end of the tick.
+ */
+export function ballHitExtraImpulse(car: CarState, ball: BallState, tick: number): Vec3 | null {
+  if (!(tick > car.ballImpulseTick + 1 || car.ballImpulseTick > tick)) return null;
+  const fwd = qforward(car.quat);
+  const relPos = vsub(ball.pos, car.pos);
+  const relSpeed = Math.min(vlen(vsub(ball.vel, car.vel)), BALL_HIT_MAX_REL_SPEED);
+  if (relSpeed <= 0) return v3();
+  let dir = vnorm(v3(relPos.x, relPos.y, relPos.z * BALL_HIT_Z_SCALE));
+  dir = vnorm(vsub(dir, vscale(fwd, vdot(dir, fwd) * (1 - BALL_HIT_FORWARD_SCALE))));
+  return vscale(dir, relSpeed * curve(BALL_HIT_SCALE, relSpeed));
 }
 
 // ---------------------------------------------------------------------------
-// Car vs car
+// Car vs car (box-box contact points + RocketSim bump/demo rules)
 // ---------------------------------------------------------------------------
 
 const BOX_POINTS: Vec3[] = (() => {
   const pts: Vec3[] = [];
   for (const sx of [-1, 0, 1])
     for (const sy of [-1, 0, 1])
-      for (const sz of [-1, 1]) pts.push(v3(sx * H.x, sy * H.y, sz * H.z));
+      for (const sz of [-1, 0, 1]) {
+        if (sx === 0 && sy === 0 && sz === 0) continue;
+        pts.push(v3(sx * H.x, sy * H.y, sz * H.z));
+      }
   return pts;
 })();
 
-interface BoxContact {
+export interface BoxContact {
   point: Vec3;
-  /** normal pointing from `other` towards `self` */
+  /** normal pointing from `b` towards `a` */
   normal: Vec3;
   depth: number;
 }
 
-/** Deepest point of box A inside box B. */
-function pointsInside(a: CarState, b: CarState): BoxContact | null {
+/** Points of box A inside box B. */
+function pointsInside(a: CarState, b: CarState, flip: boolean, out: BoxContact[]): void {
   const ca = hitboxCenter(a);
   const cb = hitboxCenter(b);
-  let best: BoxContact | null = null;
   for (const lp of BOX_POINTS) {
     const wp = vadd(ca, qrotate(a.quat, lp));
     const l = qinvRotate(b.quat, vsub(wp, cb));
@@ -154,62 +151,70 @@ function pointsInside(a: CarState, b: CarState): BoxContact | null {
     const fz = H.z - Math.abs(l.z);
     if (fx <= 0 || fy <= 0 || fz <= 0) continue;
     const depth = Math.min(fx, fy, fz);
-    if (best && depth <= best.depth) continue;
     const nl =
       fx === depth ? v3(Math.sign(l.x), 0, 0) : fy === depth ? v3(0, Math.sign(l.y), 0) : v3(0, 0, Math.sign(l.z));
-    best = { point: wp, normal: qrotate(b.quat, nl), depth };
+    let normal = qrotate(b.quat, nl); // out of B, towards A
+    if (flip) normal = vscale(normal, -1);
+    out.push({ point: wp, normal, depth });
   }
-  return best;
 }
 
-export interface CarCarResult {
-  bump?: { attacker: number; victim: number };
-  demo?: { attacker: number; victim: number };
+/** All contact points between two cars (normals from b towards a), deepest first. */
+export function carCarContacts(a: CarState, b: CarState): BoxContact[] {
+  if (a.demolished || b.demolished) return [];
+  if (vlen(vsub(hitboxCenter(a), hitboxCenter(b))) > 2 * Math.hypot(H.x, H.y, H.z)) return [];
+  const out: BoxContact[] = [];
+  pointsInside(a, b, false, out);
+  pointsInside(b, a, true, out);
+  out.sort((p, q) => q.depth - p.depth);
+  return out.slice(0, 4);
 }
 
-export function collideCars(a: CarState, b: CarState): CarCarResult | null {
-  if (a.demolished || b.demolished) return null;
-  if (vlen(vsub(a.pos, b.pos)) > 200) return null;
+export interface BumpResult {
+  attacker: number;
+  victim: number;
+  demo: boolean;
+  /** velocity added to the victim at the end of the tick */
+  impulse: Vec3;
+}
 
-  // Contact from either direction
-  const ab = pointsInside(a, b);
-  const ba = pointsInside(b, a);
-  let contact: BoxContact | null = null;
-  if (ab && (!ba || ab.depth >= ba.depth)) contact = ab;
-  else if (ba) contact = { point: ba.point, normal: vscale(ba.normal, -1), depth: ba.depth };
-  if (!contact) return null;
-
-  const n = contact.normal; // from b towards a
-  a.pos = vaddScaled(a.pos, n, contact.depth / 2);
-  b.pos = vaddScaled(b.pos, n, -contact.depth / 2);
-
-  const res: CarCarResult = {};
-  // Bump / demo: the attacker hits the victim with its front.
-  const tryBump = (att: CarState, vic: CarState, towardVictim: Vec3) => {
-    const local = qinvRotate(att.quat, vsub(contact!.point, hitboxCenter(att)));
-    const frontHit = local.x > H.x * 0.6;
-    const approach = vdot(att.vel, towardVictim);
-    if (!frontHit || approach < 100) return false;
-    if ((att.bumpCooldowns[vic.id] ?? 0) > 0) return true;
-    att.bumpCooldowns[vic.id] = CAR.BUMP_COOLDOWN;
-    if (att.isSupersonic && att.team !== vic.team) {
-      res.demo = { attacker: att.id, victim: vic.id };
-      return true;
+/** Arena::_BtCallback_OnCarCarCollision, checked both ways. */
+export function carCarBump(a: CarState, b: CarState, contactPoint: Vec3): BumpResult[] {
+  const res: BumpResult[] = [];
+  for (const [car1, car2] of [
+    [a, b],
+    [b, a],
+  ] as const) {
+    if (car1.demolished || car2.demolished) break;
+    if ((car1.bumpCooldowns[car2.id] ?? 0) > 0) continue;
+    const delta = vsub(car2.pos, car1.pos);
+    if (vdot(car1.vel, delta) <= 0) continue;
+    const velDir = vnorm(car1.vel);
+    const dirToOther = vnorm(delta);
+    const speedTowards = vdot(car1.vel, dirToOther);
+    const otherAway = vdot(car2.vel, velDir);
+    if (speedTowards <= otherAway) continue;
+    const local = qinvRotate(car1.quat, vsub(contactPoint, car1.pos));
+    if (local.x <= CAR.BUMP_MIN_FORWARD_DIST) continue;
+    const demo = car1.isSupersonic && car1.team !== car2.team;
+    let impulse = v3();
+    if (!demo) {
+      const base = curve(car2.onGround ? BUMP_VEL_GROUND : BUMP_VEL_AIR, speedTowards);
+      const hitUp = car2.onGround ? qup(car2.quat) : v3(0, 0, 1);
+      impulse = vadd(vscale(velDir, base), vscale(hitUp, curve(BUMP_UPWARD_VEL, speedTowards)));
     }
-    const speed = vlen(att.vel);
-    const dir = vnorm(vsub(vic.pos, att.pos));
-    const upDir = vic.onGround ? qup(vic.quat) : v3(0, 0, 1);
-    const scale = curve(vic.onGround ? BUMP_VEL_GROUND : BUMP_VEL_AIR, speed);
-    const upScale = curve(BUMP_UPWARD_VEL, speed);
-    vic.vel = vadd(vic.vel, vadd(vscale(dir, scale), vscale(upDir, upScale)));
-    vic.onGround = false;
-    res.bump = { attacker: att.id, victim: vic.id };
-    return true;
-  };
-
-  if (!tryBump(a, b, vscale(n, -1))) tryBump(b, a, n);
-  if (!res.demo) resolveContact(a, CAR_PROPS(a), b, CAR_PROPS(b), contact.point, n, 0.1, 0.1);
+    car1.bumpCooldowns[car2.id] = CAR.BUMP_COOLDOWN;
+    res.push({ attacker: car1.id, victim: car2.id, demo, impulse });
+  }
   return res;
+}
+
+export function carCarContactList(a: CarState, b: CarState, pts: BoxContact[]): Contact[] {
+  const ba = carBody(a);
+  const bb = carBody(b);
+  return pts.map((p) =>
+    makeContact(ba, bb, p.point, p.normal, MATERIAL.CAR_CAR.friction, MATERIAL.CAR_CAR.restitution),
+  );
 }
 
 export function tickBumpCooldowns(car: CarState, dt: number): void {

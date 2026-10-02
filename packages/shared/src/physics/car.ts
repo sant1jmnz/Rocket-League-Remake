@@ -1,32 +1,31 @@
-import { CAR, GRAVITY } from '../constants.js';
+import { BALL, CAR, GRAVITY } from '../constants.js';
 import { arenaDistance, arenaNormal } from '../arena/sdf.js';
-import type { CarState, ControllerInput } from '../game/state.js';
+import type { BallState, CarState, ControllerInput } from '../game/state.js';
 import {
   clamp,
   curve,
-  qfromTo,
   qforward,
-  qidentity,
-  qintegrate,
   qinvRotate,
-  qmul,
-  qrotate,
-  qslerp,
-  qup,
   qleft,
+  qrotate,
+  qup,
   vadd,
   vaddScaled,
-  vclampLen,
   vcross,
   vdot,
   vlen,
   vnorm,
-  vreject,
   vscale,
+  vsub,
   v3,
   type Vec3,
 } from '../math/vec.js';
-import { carInvInertia, resolveContact, type BodyProps } from './rigid.js';
+import { applyImpulse, ballBody, carBody, effInvMass, pointVel, type Body } from './rigid.js';
+
+// Car simulation ported from RocketSim (Car.cpp + btVehicleRL.cpp), which reproduces Rocket
+// League's Bullet raycast vehicle: four suspension rays with springs, per-wheel lateral friction
+// impulses, engine/brake rolling friction, sticky forces, and the game's jump/flip/air-control
+// logic. Everything is in uu (Bullet's mass-scaled units cancel out).
 
 export interface CarStepEvents {
   jumped?: boolean;
@@ -36,17 +35,608 @@ export interface CarStepEvents {
   wallHit?: number;
 }
 
-const WHEEL_CONTACT_TOL = 8;
-const MOVING_AWAY_SPEED = 60;
-const ALIGN_RATE = 28;
-const FLIP_SPIN_RATE = 40;
+/** Per-tick forces accumulated before the world step (as accelerations). */
+export interface CarForces {
+  /** linear acceleration (uu/s²), gravity not included */
+  accel: Vec3;
+  /** angular acceleration (rad/s²) */
+  angAccel: Vec3;
+  /** velocity added at the end of the tick (bumps) */
+  velCache: Vec3;
+}
 
-export const CAR_PROPS = (car: CarState): BodyProps => ({
-  invMass: 1 / CAR.MASS,
-  invInertia: (v: Vec3) => carInvInertia(car.quat, v),
+export const newForces = (): CarForces => ({ accel: v3(), angAccel: v3(), velCache: v3() });
+
+interface WheelDef {
+  cs: Vec3;
+  front: boolean;
+  radius: number;
+  rest: number;
+  rayLen: number;
+  pushbackThresh: number;
+  forceScale: number;
+}
+
+const WHEEL_DEFS: WheelDef[] = CAR.WHEELS.map((w) => {
+  const radius = w.front ? CAR.FRONT_WHEEL_RADIUS : CAR.BACK_WHEEL_RADIUS;
+  const rest = (w.front ? CAR.FRONT_SUSPENSION_REST : CAR.BACK_SUSPENSION_REST) - CAR.SUSPENSION_MAX_TRAVEL;
+  return {
+    cs: v3(w.x, w.y, w.z),
+    front: w.front,
+    radius,
+    rest,
+    rayLen: rest + CAR.SUSPENSION_MAX_TRAVEL + radius - CAR.SUSPENSION_SUBTRACTION,
+    pushbackThresh: rest + radius - CAR.SUSPENSION_SUBTRACTION,
+    forceScale: w.front ? CAR.SUSPENSION_FORCE_SCALE_FRONT : CAR.SUSPENSION_FORCE_SCALE_BACK,
+  };
 });
 
-/** Hitbox sample points in car-local space (corners, edge midpoints, face centers). */
+/** Wheel radius / rest suspension (for the renderer). */
+export const WHEEL_INFO = WHEEL_DEFS.map((w) => ({ radius: w.radius, rest: w.rest, front: w.front, cs: w.cs }));
+
+export function hitboxCenter(car: CarState): Vec3 {
+  return vadd(car.pos, qrotate(car.quat, CAR.HITBOX_OFFSET));
+}
+
+export function carSpeed(car: CarState): number {
+  return vlen(car.vel);
+}
+
+/** Car-local axes (forward, left, up) in world space. */
+export function carAxes(car: CarState): { forward: Vec3; left: Vec3; up: Vec3 } {
+  return { forward: qforward(car.quat), left: qleft(car.quat), up: qup(car.quat) };
+}
+
+// ---------------------------------------------------------------------------
+// Raycasts (suspension rays hit the arena, the ball and other cars)
+// ---------------------------------------------------------------------------
+
+interface RayHit {
+  t: number;
+  point: Vec3;
+  normal: Vec3;
+  /** null = static arena */
+  body: Body | null;
+}
+
+export interface RayScene {
+  ball: BallState | null;
+  cars: CarState[];
+}
+
+/** Sphere-traces the arena distance field. */
+export function raycastArena(o: Vec3, d: Vec3, maxT: number): { t: number; point: Vec3; normal: Vec3 } | null {
+  let t = 0;
+  for (let i = 0; i < 32; i++) {
+    const p = vaddScaled(o, d, t);
+    const dist = arenaDistance(p);
+    if (dist < 0.02) {
+      if (i === 0 && dist < -1) return null; // ray starts inside a wall
+      return { t, point: p, normal: arenaNormal(p) };
+    }
+    t += dist;
+    if (t > maxT) return null;
+  }
+  return null;
+}
+
+function raySphere(o: Vec3, d: Vec3, c: Vec3, r: number, maxT: number): number | null {
+  const m = vsub(o, c);
+  const b = vdot(m, d);
+  const cc = vdot(m, m) - r * r;
+  if (cc > 0 && b > 0) return null;
+  const disc = b * b - cc;
+  if (disc < 0) return null;
+  const t = Math.max(0, -b - Math.sqrt(disc));
+  return t <= maxT ? t : null;
+}
+
+function rayCarBox(o: Vec3, d: Vec3, car: CarState, maxT: number): { t: number; normal: Vec3 } | null {
+  const c = hitboxCenter(car);
+  const lo = qinvRotate(car.quat, vsub(o, c));
+  const ld = qinvRotate(car.quat, d);
+  const h = CAR.HITBOX_HALF;
+  let tmin = 0;
+  let tmax = maxT;
+  let axis = -1;
+  let sgn = 1;
+  const comps: [number, number, number][] = [
+    [lo.x, ld.x, h.x],
+    [lo.y, ld.y, h.y],
+    [lo.z, ld.z, h.z],
+  ];
+  for (let i = 0; i < 3; i++) {
+    const [p, v, e] = comps[i];
+    if (Math.abs(v) < 1e-9) {
+      if (p < -e || p > e) return null;
+      continue;
+    }
+    let t1 = (-e - p) / v;
+    let t2 = (e - p) / v;
+    let s = -1;
+    if (t1 > t2) {
+      [t1, t2] = [t2, t1];
+      s = 1;
+    }
+    if (t1 > tmin) {
+      tmin = t1;
+      axis = i;
+      sgn = s;
+    }
+    tmax = Math.min(tmax, t2);
+    if (tmin > tmax) return null;
+  }
+  if (axis < 0) return null; // origin inside the box
+  const ln = v3(axis === 0 ? sgn : 0, axis === 1 ? sgn : 0, axis === 2 ? sgn : 0);
+  return { t: tmin, normal: qrotate(car.quat, ln) };
+}
+
+function castRay(o: Vec3, d: Vec3, maxT: number, self: CarState, scene: RayScene): RayHit | null {
+  let best: RayHit | null = null;
+  const w = raycastArena(o, d, maxT);
+  if (w) best = { t: w.t, point: w.point, normal: w.normal, body: null };
+  const ball = scene.ball;
+  if (ball) {
+    const t = raySphere(o, d, ball.pos, BALL.RADIUS, best ? best.t : maxT);
+    if (t !== null) {
+      const point = vaddScaled(o, d, t);
+      best = { t, point, normal: vnorm(vsub(point, ball.pos)), body: ballBody(ball) };
+    }
+  }
+  for (const other of scene.cars) {
+    if (other === self || other.demolished) continue;
+    if (vlen(vsub(other.pos, o)) > maxT + 120) continue;
+    const r = rayCarBox(o, d, other, best ? best.t : maxT);
+    if (r) best = { t: r.t, point: vaddScaled(o, d, r.t), normal: r.normal, body: carBody(other) };
+  }
+  return best;
+}
+
+// ---------------------------------------------------------------------------
+// Pre-tick update (RocketSim Car::_PreTickUpdate)
+// ---------------------------------------------------------------------------
+
+interface WheelState {
+  hit: RayHit | null;
+  hardPoint: Vec3;
+  suspLen: number;
+  suspRelVel: number;
+  invContactDot: number;
+  extraPushback: number;
+}
+
+/**
+ * Runs the vehicle logic for one tick. Impulses are applied to the car velocities immediately;
+ * forces go into `f` and are integrated by the world step together with gravity.
+ */
+export function carPreTick(
+  car: CarState,
+  rawInput: ControllerInput,
+  dt: number,
+  unlimitedBoost: boolean,
+  scene: RayScene,
+  f: CarForces,
+): CarStepEvents {
+  const ev: CarStepEvents = {};
+  const controls: ControllerInput = {
+    throttle: clamp(rawInput.throttle, -1, 1),
+    steer: clamp(rawInput.steer, -1, 1),
+    pitch: clamp(rawInput.pitch, -1, 1),
+    yaw: clamp(rawInput.yaw, -1, 1),
+    roll: clamp(rawInput.roll, -1, 1),
+    jump: !!rawInput.jump,
+    boost: !!rawInput.boost,
+    handbrake: !!rawInput.handbrake,
+  };
+  const jumpPressed = controls.jump && !car.lastInput.jump;
+  const body = carBody(car);
+  const fwd = qforward(car.quat);
+  const left = qleft(car.quat);
+  const up = qup(car.quat);
+  const down = vscale(up, -1);
+
+  // ------------------------------------------------- suspension raycasts
+  const wheels: WheelState[] = WHEEL_DEFS.map((w) => {
+    const hardPoint = vadd(car.pos, qrotate(car.quat, w.cs));
+    const st: WheelState = {
+      hit: null,
+      hardPoint,
+      suspLen: w.rest + CAR.SUSPENSION_MAX_TRAVEL,
+      suspRelVel: 0,
+      invContactDot: 1,
+      extraPushback: 0,
+    };
+    const hit = castRay(hardPoint, down, w.rayLen, car, scene);
+    if (!hit) return st;
+    st.hit = hit;
+    const traceLen = vdot(vsub(hardPoint, hit.point), up);
+    st.suspLen = clamp(traceLen - w.radius, w.rest - CAR.SUSPENSION_MAX_TRAVEL, w.rest + CAR.SUSPENSION_MAX_TRAVEL);
+    const denom = vdot(hit.normal, up);
+    const projVel = vdot(hit.normal, pointVel(body, hit.point));
+    if (denom > 0.1) {
+      st.suspRelVel = projVel / denom;
+      st.invContactDot = 1 / denom;
+    } else {
+      st.suspRelVel = 0;
+      st.invContactDot = 10;
+    }
+    if (!hit.body && traceLen < w.pushbackThresh) {
+      // Bullet resolveSingleCollision (not applied, just measured): pushes a heavily compressed
+      // wheel back out of the surface.
+      const dist = traceLen - w.pushbackThresh;
+      const relN = vdot(hit.normal, pointVel(body, hit.point));
+      const k = effInvMass(body, hit.point, hit.normal);
+      const j = Math.max(0, (0.2 * -dist) / dt / k - relN / k);
+      st.extraPushback = j / WHEEL_DEFS.length;
+    }
+    return st;
+  });
+  let numContacts = 0;
+  let worldContactWheels = false;
+  for (const w of wheels) {
+    if (w.hit) {
+      numContacts++;
+      if (!w.hit.body) worldContactWheels = true;
+    }
+  }
+  car.wheelContacts = numContacts;
+  car.wheelSusp = wheels.map((w) => w.suspLen);
+  const wasOnGround = car.onGround;
+  car.onGround = numContacts >= 3;
+  if (car.onGround && !wasOnGround) ev.landed = true;
+
+  const forwardSpeed = vdot(car.vel, fwd);
+  const absForwardSpeed = Math.abs(forwardSpeed);
+  const hasBoost = unlimitedBoost || car.boost > 0;
+
+  // ------------------------------------------------------ wheels
+  car.handbrakeAmount = clamp(
+    car.handbrakeAmount + (controls.handbrake ? CAR.POWERSLIDE_RISE_RATE : -CAR.POWERSLIDE_FALL_RATE) * dt,
+    0,
+    1,
+  );
+  let realThrottle = controls.throttle;
+  let realBrake = 0;
+  if (controls.boost && hasBoost) realThrottle = 1;
+
+  let driveSpeedScale = curve(CAR.DRIVE_SPEED_TORQUE_FACTOR, absForwardSpeed);
+  let engineThrottle = realThrottle;
+  if (!controls.handbrake) {
+    if (Math.abs(realThrottle) >= CAR.THROTTLE_DEADZONE) {
+      if (absForwardSpeed > CAR.STOPPING_FORWARD_VEL && Math.sign(realThrottle) !== Math.sign(forwardSpeed)) {
+        // Driving against the motion: full brake, no engine
+        realBrake = 1;
+        if (absForwardSpeed > CAR.BRAKING_NO_THROTTLE_SPEED_THRESH) engineThrottle = 0;
+      }
+    } else {
+      // Coasting: light brake, full stop when nearly still
+      engineThrottle = 0;
+      realBrake = absForwardSpeed < CAR.STOPPING_FORWARD_VEL ? 1 : CAR.COASTING_BRAKE_FACTOR;
+    }
+  }
+  if (numContacts < 3) driveSpeedScale /= 4;
+  const engineForce = engineThrottle * CAR.MASS * CAR.THROTTLE_TORQUE * driveSpeedScale;
+  const brakeForce = realBrake * CAR.MASS * CAR.BRAKE_TORQUE;
+
+  let steerAngle = curve(CAR.STEER_ANGLE, absForwardSpeed);
+  if (car.handbrakeAmount > 0) {
+    steerAngle += (curve(CAR.POWERSLIDE_STEER_ANGLE, absForwardSpeed) - steerAngle) * car.handbrakeAmount;
+  }
+  steerAngle *= controls.steer;
+
+  // Wheel frames: front wheels are rotated by the steer angle (positive steer = turn right)
+  const cs = Math.cos(steerAngle);
+  const sn = Math.sin(steerAngle);
+  const steeredLeft = vadd(vscale(left, cs), vscale(fwd, sn));
+
+  const frictionScale = CAR.MASS / 3;
+  const sticky = realThrottle !== 0;
+  const impulses: { point: Vec3; impulse: Vec3 }[] = [];
+  WHEEL_DEFS.forEach((def, i) => {
+    const w = wheels[i];
+    const hit = w.hit;
+    if (!hit) return;
+    const n = hit.normal;
+    const wheelLeft = def.front ? steeredLeft : left;
+
+    // Friction factors (Car::_UpdateWheels)
+    const crossVec = pointVel(body, w.hardPoint);
+    const baseFriction = Math.abs(vdot(crossVec, wheelLeft));
+    const longDir0 = vcross(wheelLeft, n);
+    let frictionCurveInput = 0;
+    if (baseFriction > 5) frictionCurveInput = baseFriction / (Math.abs(vdot(crossVec, longDir0)) + baseFriction);
+    let latFriction = curve(CAR.LAT_FRICTION, frictionCurveInput);
+    let longFriction = 1;
+    if (car.handbrakeAmount > 0) {
+      const hb = car.handbrakeAmount;
+      latFriction *= (curve(CAR.HANDBRAKE_LAT_FRICTION, frictionCurveInput) - 1) * hb + 1;
+      longFriction *= (curve(CAR.HANDBRAKE_LONG_FRICTION, frictionCurveInput) - 1) * hb + 1;
+    }
+    if (!sticky) {
+      const nonSticky = curve(CAR.NON_STICKY_FRICTION, n.z);
+      latFriction *= nonSticky;
+      longFriction *= nonSticky;
+    }
+
+    // Friction impulses (btVehicleRL::calcFrictionImpulses)
+    let axle = vsub(wheelLeft, vscale(n, vdot(wheelLeft, n)));
+    axle = vnorm(axle);
+    const wheelFwd = vnorm(vcross(axle, n));
+    const groundVel = hit.body ? pointVel(hit.body, hit.point) : v3();
+    const contactVel = vsub(pointVel(body, hit.point), groundVel);
+    const kSide = effInvMass(body, hit.point, axle) + (hit.body ? effInvMass(hit.body, hit.point, axle) : 0);
+    const sideImpulse = (-0.2 * vdot(contactVel, axle)) / kSide;
+    let rolling = 0;
+    if (engineForce === 0) {
+      if (brakeForce > 0) {
+        const relV = vdot(contactVel, wheelFwd);
+        rolling = clamp(-relV * CAR.ROLLING_FRICTION_SCALE, -brakeForce, brakeForce);
+      }
+    } else {
+      rolling = engineForce / frictionScale;
+    }
+    const total = vadd(vscale(wheelFwd, rolling * longFriction), vscale(axle, sideImpulse * latFriction));
+    // Applied at the contact point moved to the height of the center of mass
+    const off = vsub(hit.point, car.pos);
+    const relPos = vsub(off, vscale(up, vdot(up, off)));
+    impulses.push({ point: vadd(car.pos, relPos), impulse: vscale(total, frictionScale * dt) });
+  });
+
+  // Sticky force towards the surface
+  if (worldContactWheels) {
+    let sum = v3();
+    for (const w of wheels) if (w.hit) sum = vadd(sum, w.hit.normal);
+    const upDir = vnorm(sum);
+    const fullStick = realThrottle !== 0 || absForwardSpeed > CAR.STOPPING_FORWARD_VEL;
+    let scale = 0.5;
+    if (fullStick) scale += 1 - Math.abs(upDir.z);
+    f.accel = vaddScaled(f.accel, upDir, scale * GRAVITY);
+  }
+
+  // ------------------------------------------------------ air control
+  if (numContacts < 3) airTorque(car, controls, numContacts === 0, f);
+  else car.isFlipping = false;
+
+  // ------------------------------------------------------ jump
+  if (car.onGround && !car.isJumping) {
+    if (!(car.hasJumped && car.jumpTime < CAR.JUMP_MIN_TIME + CAR.JUMP_RESET_TIME_PAD)) {
+      car.hasJumped = false;
+      car.jumpTime = 0;
+    }
+  }
+  if (car.isJumping) {
+    car.isJumping = car.jumpTime < CAR.JUMP_MIN_TIME || (controls.jump && car.jumpTime < CAR.JUMP_MAX_TIME);
+  } else if (car.onGround && jumpPressed) {
+    car.isJumping = true;
+    car.jumpTime = 0;
+    car.vel = vaddScaled(car.vel, up, CAR.JUMP_IMPULSE);
+    ev.jumped = true;
+  }
+  if (car.isJumping) {
+    car.hasJumped = true;
+    const k = car.jumpTime < CAR.JUMP_MIN_TIME ? CAR.JUMP_PRE_MIN_ACCEL_SCALE : 1;
+    f.accel = vaddScaled(f.accel, up, CAR.JUMP_ACCEL * k);
+  }
+  if (car.isJumping || car.hasJumped) car.jumpTime += dt;
+
+  // ------------------------------------------------------ auto-flip
+  if (jumpPressed && car.worldContact && car.worldContactNormal.z > CAR.AUTOFLIP_NORMZ_THRESH) {
+    const absRoll = Math.atan2(Math.abs(left.z), up.z);
+    if (absRoll > CAR.AUTOFLIP_ROLL_THRESH) {
+      car.autoFlipTimer = CAR.AUTOFLIP_TIME * (absRoll / Math.PI);
+      // rotate about the forward axis in the direction that brings the roof up
+      car.autoFlipTorqueScale = left.z > 0 ? -1 : 1;
+      car.isAutoFlipping = true;
+      car.vel = vaddScaled(car.vel, up, -CAR.AUTOFLIP_IMPULSE);
+    }
+  }
+  if (car.isAutoFlipping) {
+    if (car.autoFlipTimer <= 0) {
+      car.isAutoFlipping = false;
+      car.autoFlipTimer = 0;
+    } else {
+      car.angVel = vaddScaled(car.angVel, fwd, CAR.AUTOFLIP_TORQUE * car.autoFlipTorqueScale * dt);
+      car.autoFlipTimer -= dt;
+    }
+  }
+
+  // ------------------------------------------------------ double jump / flip
+  doubleJumpOrFlip(car, controls, dt, jumpPressed, forwardSpeed, ev);
+
+  // ------------------------------------------------------ auto-roll
+  if (controls.throttle !== 0 && ((numContacts > 0 && numContacts < 4) || car.worldContact)) {
+    let groundUp: Vec3;
+    if (numContacts > 0) {
+      let sum = v3();
+      for (const w of wheels) if (w.hit) sum = vadd(sum, w.hit.normal);
+      groundUp = vnorm(sum);
+    } else groundUp = car.worldContactNormal;
+    const idealLeft = vnorm(vcross(groundUp, fwd));
+    const idealFwd = vcross(idealLeft, groundUp);
+    const rollFactor = 1 - clamp(vdot(left, idealLeft), 0, 1);
+    const pitchFactor = 1 - clamp(vdot(fwd, idealFwd), 0, 1);
+    const rollTorque = vscale(fwd, (vdot(left, groundUp) >= 0 ? -1 : 1) * rollFactor);
+    const pitchTorque = vscale(left, (vdot(fwd, groundUp) >= 0 ? 1 : -1) * pitchFactor);
+    f.accel = vaddScaled(f.accel, groundUp, -CAR.AUTOROLL_FORCE);
+    f.angAccel = vaddScaled(f.angAccel, vadd(rollTorque, pitchTorque), CAR.AUTOROLL_TORQUE);
+  }
+  car.worldContact = false;
+
+  // ------------------------------------------------------ suspension
+  // (the jump/flip code above may have replaced the velocity objects: rebuild the body view)
+  const sb = carBody(car);
+  WHEEL_DEFS.forEach((def, i) => {
+    const w = wheels[i];
+    if (!w.hit) return;
+    let force = (def.rest - w.suspLen) * CAR.SUSPENSION_STIFFNESS * w.invContactDot;
+    const damp = w.suspRelVel < 0 ? CAR.SUSPENSION_DAMP_COMPRESSION : CAR.SUSPENSION_DAMP_RELAXATION;
+    force = (force - damp * w.suspRelVel) * def.forceScale;
+    if (force < 0) force = 0; // RL never pulls the car down with the suspension
+    const j = force * dt + w.extraPushback;
+    if (j !== 0) applyImpulse(sb, w.hit.point, vscale(w.hit.normal, j));
+  });
+  for (const im of impulses) applyImpulse(sb, im.point, im.impulse);
+
+  // ------------------------------------------------------ boost
+  if (hasBoost) {
+    if (car.isBoosting) car.isBoosting = controls.boost || car.boostingTime < CAR.BOOST_MIN_TIME;
+    else car.isBoosting = controls.boost;
+  } else car.isBoosting = false;
+  if (car.isBoosting) car.boostingTime += dt;
+  else car.boostingTime = 0;
+  if (car.isBoosting) {
+    if (!unlimitedBoost) car.boost = Math.max(0, car.boost - CAR.BOOST_USE_PER_SEC * dt);
+    f.accel = vaddScaled(f.accel, fwd, car.onGround ? CAR.BOOST_ACCEL_GROUND : CAR.BOOST_ACCEL_AIR);
+  }
+  car.boost = Math.min(car.boost, CAR.BOOST_MAX);
+
+  car.lastInput = controls;
+  return ev;
+}
+
+/** Car::_UpdateAirTorque */
+function airTorque(car: CarState, controls: ControllerInput, updateAirControl: boolean, f: CarForces): void {
+  const fwd = qforward(car.quat);
+  const left = qleft(car.quat);
+  const up = qup(car.quat);
+  // Rotation axes in this right-handed frame: nose up = about -left, yaw right = about -up,
+  // roll right = about +forward.
+  const pitchAxis = vscale(left, -1);
+  const yawAxis = vscale(up, -1);
+  const rollAxis = fwd;
+
+  let doAirControl = false;
+  if (car.isFlipping) car.isFlipping = car.hasFlipped && car.flipTime < CAR.FLIP_TORQUE_TIME;
+  if (car.isFlipping) {
+    if (car.flipTorqueX !== 0 || car.flipTorqueY !== 0) {
+      // Flip cancel: pulling the stick against a front/back flip stops its rotation
+      let pitchScale = 1;
+      if (car.flipTorqueY !== 0 && controls.pitch !== 0 && Math.sign(car.flipTorqueY) === Math.sign(controls.pitch)) {
+        pitchScale = 1 - Math.min(Math.abs(controls.pitch), 1);
+        doAirControl = true;
+      }
+      const local = v3(car.flipTorqueX * CAR.FLIP_TORQUE_X, car.flipTorqueY * pitchScale * CAR.FLIP_TORQUE_Y, 0);
+      f.angAccel = vadd(f.angAccel, qrotate(car.quat, local));
+    } else {
+      doAirControl = true; // stall
+    }
+  } else {
+    doAirControl = true;
+  }
+  doAirControl = doAirControl && !car.isAutoFlipping && updateAirControl;
+
+  if (doAirControl) {
+    let pitchTorqueScale = 1;
+    let torque = v3();
+    if (controls.pitch || controls.yaw || controls.roll) {
+      if (car.isFlipping) pitchTorqueScale = 0;
+      else if (car.hasFlipped && car.flipTime < CAR.FLIP_TORQUE_TIME + CAR.FLIP_PITCHLOCK_EXTRA_TIME) pitchTorqueScale = 0;
+      torque = vadd(
+        vadd(
+          vscale(pitchAxis, controls.pitch * pitchTorqueScale * CAR.AIR_TORQUE.pitch),
+          vscale(yawAxis, controls.yaw * CAR.AIR_TORQUE.yaw),
+        ),
+        vscale(rollAxis, controls.roll * CAR.AIR_TORQUE.roll),
+      );
+    }
+    const w = car.angVel;
+    const dampPitch = vdot(pitchAxis, w) * CAR.AIR_DAMP.pitch * (1 - Math.abs(controls.pitch * pitchTorqueScale));
+    const dampYaw = vdot(yawAxis, w) * CAR.AIR_DAMP.yaw * (1 - Math.abs(controls.yaw));
+    const dampRoll = vdot(rollAxis, w) * CAR.AIR_DAMP.roll;
+    const damping = vadd(vadd(vscale(yawAxis, dampYaw), vscale(pitchAxis, dampPitch)), vscale(rollAxis, dampRoll));
+    f.angAccel = vaddScaled(f.angAccel, vsub(torque, damping), CAR.TORQUE_SCALE);
+  }
+
+  if (controls.throttle !== 0) f.accel = vaddScaled(f.accel, fwd, controls.throttle * CAR.AIR_THROTTLE_ACCEL);
+}
+
+/** Car::_UpdateDoubleJumpOrFlip */
+function doubleJumpOrFlip(
+  car: CarState,
+  controls: ControllerInput,
+  dt: number,
+  jumpPressed: boolean,
+  forwardSpeed: number,
+  ev: CarStepEvents,
+): void {
+  if (car.onGround) {
+    car.hasDoubleJumped = false;
+    car.hasFlipped = false;
+    car.airTime = 0;
+    car.airTimeSinceJump = 0;
+    car.flipTime = 0;
+  } else {
+    car.airTime += dt;
+    if (car.hasJumped && !car.isJumping) car.airTimeSinceJump += dt;
+    else car.airTimeSinceJump = 0;
+
+    if (jumpPressed && car.airTimeSinceJump < CAR.DOUBLE_JUMP_WINDOW) {
+      const inputMagnitude = Math.abs(controls.yaw) + Math.abs(controls.pitch) + Math.abs(controls.roll);
+      const isFlipInput = inputMagnitude >= CAR.DODGE_DEADZONE;
+      const canUse = !car.hasDoubleJumped && !car.hasFlipped && !car.isAutoFlipping;
+      if (canUse) {
+        if (isFlipInput) {
+          car.flipTime = 0;
+          car.hasFlipped = true;
+          car.isFlipping = true;
+          ev.flipped = true;
+          // dodge direction: x = forward, y = right
+          let dx = -controls.pitch;
+          let dy = controls.yaw + controls.roll;
+          if (Math.abs(dy) < 0.1 && Math.abs(dx) < 0.1) {
+            dx = 0;
+            dy = 0;
+          } else {
+            const l = Math.hypot(dx, dy);
+            dx /= l;
+            dy /= l;
+          }
+          // Car-space rotation: side flips roll about forward, front flips pitch nose down
+          car.flipTorqueX = dy;
+          car.flipTorqueY = dx;
+          if (Math.abs(dx) < 0.1) dx = 0;
+          if (Math.abs(dy) < 0.1) dy = 0;
+          if (dx !== 0 || dy !== 0) {
+            const ratio = Math.abs(forwardSpeed) / CAR.MAX_SPEED;
+            const backwards = Math.abs(forwardSpeed) < 100 ? dx < 0 : dx >= 0 !== forwardSpeed >= 0;
+            let ix = dx * CAR.FLIP_INITIAL_VEL;
+            let iy = dy * CAR.FLIP_INITIAL_VEL;
+            const maxScaleX = backwards ? CAR.FLIP_BACKWARD_SPEED_SCALE : CAR.FLIP_FORWARD_SPEED_SCALE;
+            ix *= (maxScaleX - 1) * ratio + 1;
+            iy *= (CAR.FLIP_SIDE_SPEED_SCALE - 1) * ratio + 1;
+            if (backwards) ix *= CAR.FLIP_BACKWARD_X_SCALE;
+            const fw = qforward(car.quat);
+            let f2 = v3(fw.x, fw.y, 0);
+            f2 = vlen(f2) < 1e-6 ? v3(1, 0, 0) : vnorm(f2);
+            const r2 = v3(f2.y, -f2.x, 0);
+            car.vel = vadd(car.vel, vadd(vscale(f2, ix), vscale(r2, iy)));
+          }
+        } else {
+          car.vel = vaddScaled(car.vel, qup(car.quat), CAR.JUMP_IMPULSE);
+          car.hasDoubleJumped = true;
+          ev.doubleJumped = true;
+        }
+      }
+    }
+  }
+
+  if (car.isFlipping) {
+    car.flipTime += dt;
+    if (car.flipTime <= CAR.FLIP_TORQUE_TIME) {
+      if (car.flipTime >= CAR.FLIP_Z_DAMP_START && (car.vel.z < 0 || car.flipTime < CAR.FLIP_Z_DAMP_END)) {
+        car.vel = { ...car.vel, z: car.vel.z * (1 - CAR.FLIP_Z_DAMP_120) };
+      }
+    }
+  } else if (car.hasFlipped) {
+    car.flipTime += dt;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Hitbox vs arena
+// ---------------------------------------------------------------------------
+
+/** Hitbox sample points in car space (corners, edge midpoints, face centers). */
 const HITBOX_POINTS: Vec3[] = (() => {
   const pts: Vec3[] = [];
   const h = CAR.HITBOX_HALF;
@@ -61,355 +651,30 @@ const HITBOX_POINTS: Vec3[] = (() => {
 })();
 const HITBOX_BOUND = Math.hypot(CAR.HITBOX_HALF.x, CAR.HITBOX_HALF.y, CAR.HITBOX_HALF.z) + 5;
 
-export function hitboxCenter(car: CarState): Vec3 {
-  return vadd(car.pos, qrotate(car.quat, CAR.HITBOX_OFFSET));
+export interface ArenaContactPoint {
+  point: Vec3;
+  normal: Vec3;
+  /** penetration (negative = gap of a speculative contact) */
+  depth: number;
 }
 
-export function carSpeed(car: CarState): number {
-  return vlen(car.vel);
+/**
+ * Points of the car hitbox inside (or within `margin` of) the arena walls, deepest first
+ * (Bullet keeps up to 4 per manifold).
+ */
+export function carArenaContacts(car: CarState, margin = 0): ArenaContactPoint[] {
+  const out: ArenaContactPoint[] = [];
+  if (arenaDistance(hitboxCenter(car)) >= HITBOX_BOUND + margin) return out;
+  for (const lp of HITBOX_POINTS) {
+    const wp = vadd(car.pos, qrotate(car.quat, lp));
+    const d = arenaDistance(wp);
+    if (d < margin) out.push({ point: wp, normal: arenaNormal(wp), depth: -d });
+  }
+  out.sort((a, b) => b.depth - a.depth);
+  return out.slice(0, 4);
 }
 
-export function stepCar(
-  car: CarState,
-  rawInput: ControllerInput,
-  dt: number,
-  unlimitedBoost: boolean,
-  frozen = false,
-): CarStepEvents {
-  const ev: CarStepEvents = {};
-  if (car.demolished) return ev;
-
-  const input: ControllerInput = {
-    throttle: clamp(rawInput.throttle, -1, 1),
-    steer: clamp(rawInput.steer, -1, 1),
-    pitch: clamp(rawInput.pitch, -1, 1),
-    yaw: clamp(rawInput.yaw, -1, 1),
-    roll: clamp(rawInput.roll, -1, 1),
-    jump: !!rawInput.jump,
-    boost: !!rawInput.boost,
-    handbrake: !!rawInput.handbrake,
-  };
-  const jumpPressed = input.jump && !car.lastInput.jump;
-  car.lastInput = input;
-
-  if (frozen) {
-    // Kickoff countdown: cars cannot move, but stay glued to the floor.
-    car.vel = v3();
-    car.angVel = v3();
-    return ev;
-  }
-
-  // ---------------------------------------------------------------- boost
-  const hasBoost = unlimitedBoost || car.boost > 0;
-  let boosting = false;
-  if (hasBoost && (input.boost || (car.boostingTime > 0 && car.boostingTime < CAR.BOOST_MIN_TIME))) {
-    boosting = true;
-    car.boostingTime += dt;
-    if (!unlimitedBoost) car.boost = Math.max(0, car.boost - CAR.BOOST_USE_PER_SEC * dt);
-  } else {
-    car.boostingTime = 0;
-  }
-
-  car.handbrakeAmount = input.handbrake
-    ? Math.min(1, car.handbrakeAmount + 5 * dt)
-    : Math.max(0, car.handbrakeAmount - 2 * dt);
-
-  // ------------------------------------------------------- ground contact
-  const up = qup(car.quat);
-  const d0 = arenaDistance(car.pos);
-  const n0 = arenaNormal(car.pos);
-  let contacts = 0;
-  if (d0 < CAR.REST_HEIGHT + 60 && vdot(up, n0) > 0.5) {
-    for (const w of CAR.WHEELS) {
-      const wp = vadd(car.pos, qrotate(car.quat, w));
-      if (arenaDistance(wp) <= CAR.REST_HEIGHT + WHEEL_CONTACT_TOL) contacts++;
-    }
-  }
-  car.wheelContacts = contacts;
-  const wasOnGround = car.onGround;
-  const movingAway = vdot(car.vel, n0) > MOVING_AWAY_SPEED;
-  const grounded = contacts >= 3 && !car.isJumping && !movingAway;
-
-  if (grounded && !wasOnGround) ev.landed = true;
-  if (grounded) {
-    car.onGround = true;
-    car.airTicks = 0;
-    car.hasJumped = false;
-    car.hasDoubleJumped = false;
-    car.hasFlipped = false;
-    car.isFlipping = false;
-    car.airTimeSinceJump = 0;
-  } else {
-    car.onGround = false;
-    car.airTicks++;
-  }
-
-  // ----------------------------------------------------------------- jump
-  if (car.onGround && jumpPressed) {
-    car.vel = vaddScaled(car.vel, up, CAR.JUMP_IMPULSE);
-    car.isJumping = true;
-    car.jumpTime = 0;
-    car.hasJumped = true;
-    car.onGround = false;
-    ev.jumped = true;
-  }
-
-  if (car.onGround) {
-    groundPhysics(car, input, dt, boosting, n0, d0, wasOnGround);
-  } else {
-    airPhysics(car, input, dt, boosting, jumpPressed && !ev.jumped, ev);
-  }
-
-  // ---------------------------------------------------- body vs arena
-  car.bodyContact = false;
-  const hc = hitboxCenter(car);
-  if (arenaDistance(hc) < HITBOX_BOUND) {
-    let deepest = 0;
-    let deepestPoint: Vec3 | null = null;
-    let deepestN: Vec3 | null = null;
-    for (const lp of HITBOX_POINTS) {
-      const wp = vadd(car.pos, qrotate(car.quat, lp));
-      const d = arenaDistance(wp);
-      if (d < 0 && -d > deepest) {
-        deepest = -d;
-        deepestPoint = wp;
-        deepestN = arenaNormal(wp);
-      }
-    }
-    if (deepestPoint && deepestN) {
-      car.bodyContact = true;
-      car.pos = vaddScaled(car.pos, deepestN, deepest);
-      const jn = resolveContact(
-        car,
-        CAR_PROPS(car),
-        null,
-        null,
-        deepestPoint,
-        deepestN,
-        CAR.RESTITUTION_WORLD,
-        CAR.FRICTION_WORLD,
-      );
-      if (jn > CAR.MASS * 300) ev.wallHit = jn / CAR.MASS;
-
-      // Auto-flip: on the roof/side touching a surface and pressing jump
-      if (jumpPressed && !car.onGround && vdot(qup(car.quat), deepestN) < 0.7071 && !ev.jumped) {
-        car.vel = vaddScaled(car.vel, deepestN, 200);
-        let axis = vcross(qup(car.quat), deepestN);
-        if (vlen(axis) < 0.1) axis = qforward(car.quat);
-        car.angVel = vscale(vnorm(axis), 7);
-      }
-    }
-  }
-
-  // ------------------------------------------------------ integrate
-  car.vel = vclampLen(car.vel, CAR.MAX_SPEED);
-  car.angVel = vclampLen(car.angVel, CAR.MAX_ANG_SPEED);
-  car.pos = vaddScaled(car.pos, car.vel, dt);
-  car.quat = qintegrate(car.quat, car.angVel, dt);
-
-  // ------------------------------------------------------ supersonic
-  const speed = vlen(car.vel);
-  if (speed >= CAR.SUPERSONIC_START) {
-    car.isSupersonic = true;
-    car.supersonicTime = 0;
-  } else if (car.isSupersonic && speed >= CAR.SUPERSONIC_MAINTAIN && car.supersonicTime < CAR.SUPERSONIC_MAINTAIN_TIME) {
-    car.supersonicTime += dt;
-  } else {
-    car.isSupersonic = false;
-    car.supersonicTime = 0;
-  }
-  return ev;
-}
-
-function groundPhysics(
-  car: CarState,
-  input: ControllerInput,
-  dt: number,
-  boosting: boolean,
-  n: Vec3,
-  dist: number,
-  wasOnGround: boolean,
-): void {
-  // Follow the surface: velocity into the surface is redirected (driving through curves keeps
-  // speed) or absorbed (landing).
-  const vn = vdot(car.vel, n);
-  if (vn < 0) {
-    const vt = vreject(car.vel, n);
-    const speed = vlen(car.vel);
-    const tl = vlen(vt);
-    if (wasOnGround && tl > 1 && -vn < 0.35 * speed) car.vel = vscale(vt, speed / tl);
-    else car.vel = vt;
-  }
-
-  // Suspension: keep the car at its rest height and aligned with the surface.
-  car.pos = vaddScaled(car.pos, n, (CAR.REST_HEIGHT - dist) * 0.5);
-  const align = qfromTo(qup(car.quat), n);
-  car.quat = qmul(qslerp(qidentity(), align, 1 - Math.exp(-ALIGN_RATE * dt)), car.quat);
-
-  const fwd = vnorm(vreject(qforward(car.quat), n));
-  const left = vcross(n, fwd);
-  const vf = vdot(car.vel, fwd);
-  const absVf = Math.abs(vf);
-
-  // Throttle / brake / coast
-  const throttle = boosting ? 1 : input.throttle;
-  let accel = 0;
-  if (Math.abs(throttle) > 0.01) {
-    if (vf * throttle < 0 && absVf > 1) {
-      accel = -Math.sign(vf) * Math.min(CAR.BRAKE_ACCEL, absVf / dt);
-    } else {
-      accel = throttle * curve(CAR.THROTTLE_CURVE, absVf);
-    }
-  } else if (absVf > 0) {
-    accel = -Math.sign(vf) * Math.min(CAR.COAST_DECEL, absVf / dt);
-  }
-  if (boosting) accel += CAR.BOOST_ACCEL_GROUND;
-  car.vel = vaddScaled(car.vel, fwd, accel * dt);
-
-  // Lateral grip (powerslide lowers it)
-  const grip = CAR.LATERAL_GRIP + (CAR.POWERSLIDE_GRIP - CAR.LATERAL_GRIP) * car.handbrakeAmount;
-  const vl = vdot(car.vel, left);
-  car.vel = vaddScaled(car.vel, left, -vl * (1 - Math.exp(-grip * dt)));
-
-  // Steering: yaw rate follows the real curvature-vs-speed table
-  const curvature = curve(CAR.STEER_CURVE, absVf);
-  const slideMult = 1 + (CAR.POWERSLIDE_STEER_MULT - 1) * car.handbrakeAmount;
-  const target = -input.steer * curvature * vf * slideMult;
-  const wn = vdot(car.angVel, n);
-  car.angVel = vscale(n, wn + (target - wn) * (1 - Math.exp(-CAR.STEER_RESPONSE * dt)));
-
-  // Gravity along the surface; the normal part is absorbed by the wheels unless it pulls the car
-  // off (ceiling / steep overhang), countered by the sticky force.
-  const g = v3(0, 0, GRAVITY);
-  const gn = vdot(g, n);
-  car.vel = vaddScaled(car.vel, vreject(g, n), dt);
-  const away = gn - CAR.STICKY_ACCEL;
-  if (away > 0) car.vel = vaddScaled(car.vel, n, away * dt);
-
-  // Full stop at very low speed without input
-  if (!boosting && Math.abs(input.throttle) < 0.01) {
-    const nvf = vdot(car.vel, fwd);
-    if (Math.abs(nvf) < CAR.STOP_SPEED && vlen(vreject(car.vel, n)) < CAR.STOP_SPEED * 2) {
-      car.vel = vscale(n, Math.max(0, vdot(car.vel, n)));
-    }
-  }
-}
-
-function airPhysics(
-  car: CarState,
-  input: ControllerInput,
-  dt: number,
-  boosting: boolean,
-  jumpPressed: boolean,
-  ev: CarStepEvents,
-): void {
-  const up = qup(car.quat);
-  const fwd = qforward(car.quat);
-
-  // Jump hold force
-  if (car.isJumping) {
-    car.jumpTime += dt;
-    const holding = input.jump && car.jumpTime < CAR.JUMP_MAX_HOLD;
-    if (holding || car.jumpTime < CAR.JUMP_MIN_HOLD) {
-      car.vel = vaddScaled(car.vel, up, CAR.JUMP_HOLD_ACCEL * dt);
-    } else {
-      car.isJumping = false;
-    }
-  } else if (car.hasJumped) {
-    car.airTimeSinceJump += dt;
-  }
-
-  // Second jump / dodge
-  const canDodge =
-    !car.hasDoubleJumped &&
-    !car.hasFlipped &&
-    (!car.hasJumped || car.airTimeSinceJump < CAR.DOUBLE_JUMP_WINDOW);
-  if (jumpPressed && canDodge) {
-    let dx = -input.pitch;
-    let dy = input.yaw + input.roll;
-    if (Math.abs(dx) < 0.1) dx = 0;
-    if (Math.abs(dy) < 0.1) dy = 0;
-    if (Math.abs(dx) + Math.abs(dy) >= CAR.DODGE_DEADZONE) {
-      const l = Math.hypot(dx, dy);
-      dx /= l;
-      dy /= l;
-      car.hasFlipped = true;
-      car.isFlipping = true;
-      car.flipTime = 0;
-      car.flipDirX = dx;
-      car.flipDirY = dy;
-      ev.flipped = true;
-
-      let f2 = v3(fwd.x, fwd.y, 0);
-      if (vlen(f2) < 0.1) f2 = v3(car.vel.x, car.vel.y, 0);
-      f2 = vlen(f2) < 0.1 ? v3(1, 0, 0) : vnorm(f2);
-      const r2 = v3(f2.y, -f2.x, 0);
-      const forwardSpeed = vdot(car.vel, f2);
-      const ratio = Math.abs(forwardSpeed) / CAR.MAX_SPEED;
-      const backwards = Math.abs(forwardSpeed) < 100 ? dx < 0 : dx >= 0 !== forwardSpeed > 0;
-      let ix = dx * CAR.FLIP_INITIAL_VEL;
-      let iy = dy * CAR.FLIP_INITIAL_VEL;
-      ix *= (backwards ? CAR.FLIP_BACKWARD_SPEED_SCALE : CAR.FLIP_FORWARD_SPEED_SCALE) * ratio + 1;
-      iy *= CAR.FLIP_SIDE_SPEED_SCALE * ratio + 1;
-      if (backwards) ix *= CAR.FLIP_BACKWARD_X_SCALE;
-      car.vel = vadd(car.vel, vadd(vscale(f2, ix), vscale(r2, iy)));
-    } else {
-      car.hasDoubleJumped = true;
-      car.vel = vaddScaled(car.vel, up, CAR.JUMP_IMPULSE);
-      ev.doubleJumped = true;
-    }
-  }
-
-  // Gravity
-  car.vel = vaddScaled(car.vel, v3(0, 0, GRAVITY), dt);
-
-  // Flip: vertical damping + spin
-  let wl = qinvRotate(car.quat, car.angVel);
-  let lockPitch = false;
-  let lockRoll = false;
-  if (car.isFlipping) {
-    car.flipTime += dt;
-    if (
-      car.flipTime < CAR.FLIP_Z_DAMP_END &&
-      (car.vel.z < 0 || car.flipTime < CAR.FLIP_Z_DAMP_START)
-    ) {
-      car.vel.z *= Math.pow(1 - CAR.FLIP_Z_DAMP_120, dt * 120);
-    }
-    if (car.flipTime >= CAR.FLIP_TORQUE_TIME) {
-      car.isFlipping = false;
-    } else {
-      const k = 1 - Math.exp(-FLIP_SPIN_RATE * dt);
-      if (car.flipDirX !== 0) {
-        // Flip cancel: pulling the stick against the flip stops the rotation
-        const cancel = input.pitch * car.flipDirX > 0 ? Math.abs(input.pitch) : 0;
-        const target = car.flipDirX * CAR.FLIP_PITCH_RATE * (1 - cancel);
-        wl.y += (target - wl.y) * k;
-        lockPitch = cancel === 0;
-      }
-      if (car.flipDirY !== 0) {
-        const target = car.flipDirY * CAR.FLIP_ROLL_RATE;
-        wl.x += (target - wl.x) * k;
-        lockRoll = true;
-      }
-    }
-  }
-
-  // Air control (torque + damping), RL coefficients
-  const T = CAR.AIR_TORQUE;
-  const D = CAR.AIR_DAMP;
-  const ax = lockRoll ? 0 : T.roll * input.roll - D.roll * wl.x;
-  const ay = lockPitch ? 0 : -T.pitch * input.pitch - D.pitch * (1 - Math.abs(input.pitch)) * wl.y;
-  const az = -T.yaw * input.yaw - D.yaw * (1 - Math.abs(input.yaw)) * wl.z;
-  wl = v3(wl.x + ax * dt, wl.y + ay * dt, wl.z + az * dt);
-  car.angVel = qrotate(car.quat, wl);
-
-  // Air throttle + boost
-  const throttle = boosting ? 1 : input.throttle;
-  car.vel = vaddScaled(car.vel, fwd, throttle * CAR.AIR_THROTTLE_ACCEL * dt);
-  if (boosting) car.vel = vaddScaled(car.vel, fwd, CAR.BOOST_ACCEL_GROUND * dt);
-}
-
-/** Car-local axes (forward, left, up) in world space. */
-export function carAxes(car: CarState): { forward: Vec3; left: Vec3; up: Vec3 } {
-  return { forward: qforward(car.quat), left: qleft(car.quat), up: qup(car.quat) };
+/** How far a hitbox point can travel in one tick (speculative contact margin). */
+export function carContactMargin(car: CarState, dt: number): number {
+  return 2 + (vlen(car.vel) + vlen(car.angVel) * 80) * dt;
 }

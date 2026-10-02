@@ -130,11 +130,11 @@ class Reader {
 
 const CAR_FLAGS: (keyof CarState)[] = [
   'isBot', 'onGround', 'hasJumped', 'isJumping', 'hasDoubleJumped', 'hasFlipped',
-  'isFlipping', 'isSupersonic', 'bodyContact', 'demolished',
+  'isFlipping', 'isSupersonic', 'worldContact', 'demolished', 'isBoosting', 'isAutoFlipping',
 ];
 const CAR_NUMS: (keyof CarState)[] = [
-  'boost', 'jumpTime', 'flipTime', 'flipDirX', 'flipDirY', 'airTimeSinceJump',
-  'boostingTime', 'supersonicTime', 'handbrakeAmount', 'respawnTimer',
+  'boost', 'jumpTime', 'flipTime', 'flipTorqueX', 'flipTorqueY', 'airTime', 'airTimeSinceJump',
+  'boostingTime', 'supersonicTime', 'handbrakeAmount', 'respawnTimer', 'autoFlipTimer', 'autoFlipTorqueScale',
 ];
 
 function writeVec(w: Writer, v: { x: number; y: number; z: number }) { w.f64(v.x); w.f64(v.y); w.f64(v.z); }
@@ -169,6 +169,7 @@ export function encodeSnapshot(s: GameState, inputLead: number): Uint8Array {
   // pads
   w.u8(s.pads.length);
   for (const p of s.pads) w.f64(p);
+  for (const p of s.padLocks) w.i16(p);
   // cars
   w.u8(s.cars.length);
   for (const c of s.cars) {
@@ -182,9 +183,11 @@ export function encodeSnapshot(s: GameState, inputLead: number): Uint8Array {
     writeVec(w, c.vel);
     writeVec(w, c.angVel);
     for (const k of CAR_NUMS) w.f64(c[k] as number);
-    w.i32(c.airTicks);
+    writeVec(w, c.worldContactNormal);
     w.u8(c.wheelContacts);
+    for (let k = 0; k < 4; k++) w.f64(c.wheelSusp[k] ?? 0);
     w.i32(c.lastBallTouchTick);
+    w.i32(c.ballImpulseTick);
     const li = c.lastInput;
     w.f64(li.throttle); w.f64(li.steer); w.f64(li.pitch); w.f64(li.yaw); w.f64(li.roll);
     w.u8((li.jump ? 1 : 0) | (li.boost ? 2 : 0) | (li.handbrake ? 4 : 0));
@@ -228,6 +231,8 @@ export function decodeSnapshot(data: ArrayBuffer | Uint8Array, names: Record<num
   const np = r.u8();
   const pads: number[] = [];
   for (let i = 0; i < np; i++) pads.push(r.f64());
+  const padLocks: number[] = [];
+  for (let i = 0; i < np; i++) padLocks.push(r.i16());
   const nc = r.u8();
   const cars: CarState[] = [];
   for (let i = 0; i < nc; i++) {
@@ -240,9 +245,11 @@ export function decodeSnapshot(data: ArrayBuffer | Uint8Array, names: Record<num
     const angVel = readVec(r);
     const nums: Record<string, number> = {};
     for (const k of CAR_NUMS) nums[k as string] = r.f64();
-    const airTicks = r.i32();
+    const worldContactNormal = readVec(r);
     const wheelContacts = r.u8();
+    const wheelSusp = [r.f64(), r.f64(), r.f64(), r.f64()];
     const lastBallTouchTick = r.i32();
+    const ballImpulseTick = r.i32();
     const lastInput: ControllerInput = {
       throttle: r.f64(), steer: r.f64(), pitch: r.f64(), yaw: r.f64(), roll: r.f64(),
       jump: false, boost: false, handbrake: false,
@@ -257,14 +264,14 @@ export function decodeSnapshot(data: ArrayBuffer | Uint8Array, names: Record<num
     const stats = { score: r.u16(), goals: r.u16(), assists: r.u16(), saves: r.u16(), shots: r.u16(), demos: r.u16(), touches: r.u16() };
     const car = {
       id, team, name: names[id] ?? `Jugador ${id}`,
-      pos, quat, vel, angVel, airTicks, wheelContacts, lastBallTouchTick, lastInput, bumpCooldowns, stats,
+      pos, quat, vel, angVel, worldContactNormal, wheelContacts, wheelSusp, lastBallTouchTick, ballImpulseTick, lastInput, bumpCooldowns, stats,
       ...nums,
     } as unknown as CarState;
     CAR_FLAGS.forEach((k, bit) => { (car as unknown as Record<string, boolean>)[k as string] = (flags & (1 << bit)) !== 0; });
     cars.push(car);
   }
   const state: GameState = {
-    tick, time, cars, ball, pads, score, clock,
+    tick, time, cars, ball, pads, padLocks, score, clock,
     clockRunning: (fl & 1) !== 0,
     overtime: (fl & 2) !== 0,
     waitingForBallGround: (fl & 4) !== 0,

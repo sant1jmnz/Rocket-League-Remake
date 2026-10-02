@@ -52,10 +52,12 @@ export interface CarState {
   angVel: Vec3;
 
   boost: number;
+  /** at least 3 wheels touching something (the game's "on ground") */
   onGround: boolean;
-  /** ticks since the car was last on the ground (used for coyote-time jumps) */
-  airTicks: number;
+  /** number of wheels whose suspension ray hits something */
   wheelContacts: number;
+  /** suspension length of each wheel (front-left, front-right, back-left, back-right), for visuals */
+  wheelSusp: number[];
   hasJumped: boolean;
   isJumping: boolean;
   jumpTime: number;
@@ -63,21 +65,31 @@ export interface CarState {
   hasFlipped: boolean;
   isFlipping: boolean;
   flipTime: number;
-  flipDirX: number;
-  flipDirY: number;
+  /** flip torque direction in car space: x = roll (side flips), y = pitch (front/back flips) */
+  flipTorqueX: number;
+  flipTorqueY: number;
+  airTime: number;
   /** time spent in the air since the first jump finished (double-jump window) */
   airTimeSinceJump: number;
+  isBoosting: boolean;
   boostingTime: number;
   isSupersonic: boolean;
   supersonicTime: number;
   handbrakeAmount: number;
-  bodyContact: boolean;
+  isAutoFlipping: boolean;
+  autoFlipTimer: number;
+  autoFlipTorqueScale: number;
+  /** the hitbox touched the arena last tick (used by auto-flip / auto-roll) */
+  worldContact: boolean;
+  worldContactNormal: Vec3;
 
   demolished: boolean;
   respawnTimer: number;
 
   /** tick when the car last touched the ball (-1 = never) */
   lastBallTouchTick: number;
+  /** tick of the last Psyonix extra hit impulse (at most every other tick) */
+  ballImpulseTick: number;
   /** per other-car bump cooldowns (by car id) */
   bumpCooldowns: Record<number, number>;
 
@@ -107,6 +119,8 @@ export interface GameState {
   ball: BallState;
   /** remaining respawn time per pad (0 = available) */
   pads: number[];
+  /** car id standing on each pad last tick (-1 = none), as RocketSim's pad lock */
+  padLocks: number[];
   score: [number, number];
   /** seconds remaining (counts up in overtime) */
   clock: number;
@@ -144,8 +158,8 @@ export function createCar(id: number, team: Team, name: string, isBot = false): 
     angVel: v3(),
     boost: CAR.BOOST_START,
     onGround: true,
-    airTicks: 0,
     wheelContacts: 4,
+    wheelSusp: [0, 0, 0, 0],
     hasJumped: false,
     isJumping: false,
     jumpTime: 0,
@@ -153,17 +167,24 @@ export function createCar(id: number, team: Team, name: string, isBot = false): 
     hasFlipped: false,
     isFlipping: false,
     flipTime: 0,
-    flipDirX: 0,
-    flipDirY: 0,
+    flipTorqueX: 0,
+    flipTorqueY: 0,
+    airTime: 0,
     airTimeSinceJump: 0,
+    isBoosting: false,
     boostingTime: 0,
     isSupersonic: false,
     supersonicTime: 0,
     handbrakeAmount: 0,
-    bodyContact: false,
+    isAutoFlipping: false,
+    autoFlipTimer: 0,
+    autoFlipTorqueScale: 0,
+    worldContact: false,
+    worldContactNormal: v3(0, 0, 1),
     demolished: false,
     respawnTimer: 0,
     lastBallTouchTick: -1,
+    ballImpulseTick: -10,
     bumpCooldowns: {},
     lastInput: {
       throttle: 0,
@@ -197,6 +218,7 @@ export function createGameState(opts: GameOptions = {}): GameState {
     cars: [],
     ball: createBall(),
     pads: BOOST_PADS.map(() => 0),
+    padLocks: BOOST_PADS.map(() => -1),
     score: [0, 0],
     clock: opts.duration ?? MATCH.DURATION,
     clockRunning: false,

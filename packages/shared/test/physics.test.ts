@@ -90,7 +90,16 @@ describe('car driving', () => {
     run(s, 1, { throttle: 1, steer: 1 });
     const speed = vlen(car.vel);
     const radius = speed / Math.abs(car.angVel.z);
-    const expected = 1 / curve(CAR.STEER_CURVE, speed);
+    // Turn curvature measured in the real game (RLBot wiki)
+    const STEER_CURVE: [number, number][] = [
+      [0, 0.0069],
+      [500, 0.00398],
+      [1000, 0.00235],
+      [1500, 0.001375],
+      [1750, 0.0011],
+      [2500, 0.00088],
+    ];
+    const expected = 1 / curve(STEER_CURVE, speed);
     expect(radius / expected).toBeGreaterThan(0.9);
     expect(radius / expected).toBeLessThan(1.1);
   });
@@ -224,9 +233,10 @@ describe('flip reset', () => {
     car.onGround = false;
     car.hasJumped = true;
     car.hasDoubleJumped = true;
+    car.jumpTime = 2;
     car.airTimeSinceJump = 3;
-    // just under the hitbox bottom (origin + 20.75 offset - 18.08 half height)
-    s.ball.pos = v3(CAR.HITBOX_OFFSET.x, 0, 600 + 2.67 - BALL.RADIUS + 5);
+    // under the car, within reach of the suspension rays (but not touching the hitbox)
+    s.ball.pos = v3(8, 0, 590 - BALL.RADIUS);
     s.ball.vel = v3();
     stepGame(s, () => emptyInput());
     expect(car.hasDoubleJumped).toBe(false);
