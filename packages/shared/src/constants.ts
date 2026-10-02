@@ -187,6 +187,9 @@ export const MATCH = {
   DURATION: 300,
   COUNTDOWN: 3,
   GOAL_CELEBRATION: 3,
+  /** Goal explosion: cars within this radius of the ball are pushed away */
+  GOAL_EXPLOSION_RADIUS: 1800,
+  GOAL_EXPLOSION_IMPULSE: 2600,
   /** Goal replay after the celebration (skippable when every player presses jump) */
   REPLAY: 5.5,
   /** The replay starts this long before the goal (the rest shows the explosion) */

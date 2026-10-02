@@ -92,3 +92,19 @@ describe('match MVP', () => {
     expect(matchMvp(s)).toBe(2);
   });
 });
+
+describe('goal explosion', () => {
+  it('pushes nearby cars away from the ball and leaves distant ones alone', () => {
+    const s = aboutToScore();
+    const near = s.cars[0];
+    const far = s.cars[1];
+    near.pos = { x: 0, y: 4400, z: 17.01 };
+    near.vel = { x: 0, y: 0, z: 0 };
+    far.pos = { x: 0, y: -2000, z: 17.01 };
+    far.vel = { x: 0, y: 0, z: 0 };
+    stepUntil(s, () => emptyInput(), () => s.phase === 'goal');
+    expect(near.vel.y).toBeLessThan(-500); // blown back out of the goal
+    expect(near.vel.z).toBeGreaterThan(0);
+    expect(Math.hypot(far.vel.x, far.vel.y, far.vel.z)).toBeLessThan(1);
+  });
+});

@@ -352,11 +352,35 @@ function scoreGoal(state: GameState, team: Team, events: GameEvent[]): void {
     }
   }
   state.lastGoal = { team, scorerId, assistId, speed };
+  goalExplosion(state, pos);
   state.phase = 'goal';
   state.phaseTimer = MATCH.GOAL_CELEBRATION;
   state.ball.vel = v3();
   state.ball.angVel = v3();
   events.push({ type: 'goal', team, scorerId, assistId, speed, pos });
+}
+
+/** The goal explosion blows nearby cars away from the ball, as in the real game. */
+function goalExplosion(state: GameState, at: Vec3): void {
+  for (const car of state.cars) {
+    if (car.demolished) continue;
+    const dx = car.pos.x - at.x;
+    const dy = car.pos.y - at.y;
+    const dz = car.pos.z - at.z;
+    const d = Math.hypot(dx, dy, dz);
+    if (d >= MATCH.GOAL_EXPLOSION_RADIUS) continue;
+    const k = MATCH.GOAL_EXPLOSION_IMPULSE * (1 - d / MATCH.GOAL_EXPLOSION_RADIUS);
+    const inv = 1 / Math.max(d, 1);
+    // outward, with some lift so cars get tossed rather than slid
+    const nx = dx * inv;
+    const ny = dy * inv;
+    const nz = Math.max(dz * inv, 0) + 0.45;
+    const nl = Math.hypot(nx, ny, nz);
+    car.vel.x += (nx / nl) * k;
+    car.vel.y += (ny / nl) * k;
+    car.vel.z += (nz / nl) * k;
+    car.onGround = false;
+  }
 }
 
 function startReplay(state: GameState, events: GameEvent[]): void {

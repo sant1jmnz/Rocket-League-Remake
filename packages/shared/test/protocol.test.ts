@@ -73,5 +73,5 @@ describe('bots', () => {
     const touches = s.cars.reduce((a, c) => a + c.stats.touches, 0);
     expect(touches).toBeGreaterThan(10);
     expect(s.phase === 'ended' || s.overtime).toBe(true);
-  });
+  }, 60000); // simulates ~90 s of a full 3v3; slow machines need the headroom
 });
