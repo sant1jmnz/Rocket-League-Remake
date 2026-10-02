@@ -38,6 +38,8 @@ interface Particle {
   r: number; g: number; b: number;
   drag: number;
   gravity: number;
+  /** peak opacity (1 = opaque at birth) */
+  alpha: number;
 }
 
 export class ParticleSystem {
@@ -86,6 +88,7 @@ export class ParticleSystem {
     color: THREE.Color;
     drag?: number;
     gravity?: number;
+    alpha?: number;
   }) {
     if (this.particles.length >= this.max) this.particles.shift();
     this.particles.push({
@@ -96,15 +99,16 @@ export class ParticleSystem {
       r: p.color.r, g: p.color.g, b: p.color.b,
       drag: p.drag ?? 0,
       gravity: p.gravity ?? 0,
+      alpha: p.alpha ?? 1,
     });
   }
 
-  burst(center: THREE.Vector3, count: number, speed: number, color: THREE.Color, life: number, size: number, gravity = 0) {
+  burst(center: THREE.Vector3, count: number, speed: number, color: THREE.Color, life: number, size: number, gravity = 0, grow = 0.2, alpha = 1) {
     const v = new THREE.Vector3();
     for (let i = 0; i < count; i++) {
       v.set(Math.random() * 2 - 1, Math.random() * 2 - 1, Math.random() * 2 - 1).normalize().multiplyScalar(speed * (0.3 + Math.random() * 0.7));
       const c = color.clone().offsetHSL(0, 0, (Math.random() - 0.5) * 0.2);
-      this.emit({ pos: center, vel: v.clone(), life: life * (0.5 + Math.random() * 0.5), size0: size, size1: size * 0.2, color: c, drag: 1.5, gravity });
+      this.emit({ pos: center, vel: v.clone(), life: life * (0.5 + Math.random() * 0.5), size0: size, size1: size * grow, color: c, drag: 1.5, gravity, alpha });
     }
   }
 
@@ -124,7 +128,7 @@ export class ParticleSystem {
       this.pos[n * 3 + 1] = p.y;
       this.pos[n * 3 + 2] = p.z;
       this.size[n] = p.size0 + (p.size1 - p.size0) * t;
-      this.alpha[n] = Math.min(1, (1 - t) * 1.5);
+      this.alpha[n] = Math.min(1, (1 - t) * 1.5, t * 12) * p.alpha;
       this.color[n * 3] = p.r;
       this.color[n * 3 + 1] = p.g;
       this.color[n * 3 + 2] = p.b;

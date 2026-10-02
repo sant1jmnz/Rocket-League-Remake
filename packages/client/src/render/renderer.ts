@@ -24,6 +24,7 @@ import { createCarModel, type CarModel } from './car';
 
 const CAR_REST = 17.01;
 import { ParticleSystem } from './particles';
+import { TrailRibbon } from './trails';
 import { setupEnvironment, type Environment } from './environment';
 import { PostFx } from './post';
 import { BoostPadsView } from './pads';
@@ -37,6 +38,9 @@ interface CarView {
   wheelSpin: number;
   steer: number;
   trailTimer: number;
+  smokeTimer: number;
+  /** supersonic wind lines from the rear wheels */
+  trails: TrailRibbon[];
 }
 
 export interface RenderOptions {
@@ -59,7 +63,7 @@ export class GameRenderer {
   private boostFx = new ParticleSystem(4000, true);
   private smokeFx = new ParticleSystem(1500, false);
   private burstFx = new ParticleSystem(3000, true);
-  private shockwaves: { mesh: THREE.Mesh; t: number }[] = [];
+  private shockwaves: { mesh: THREE.Mesh; t: number; grow?: number }[] = [];
   private time = 0;
   private env: Environment;
   private showcase: CarModel | null = null;
@@ -114,7 +118,7 @@ export class GameRenderer {
     const localTeam = state.cars.find((c) => c.id === opts.localCarId)?.team ?? null;
     for (const [id, view] of this.cars) {
       if (!ids.has(id)) {
-        this.scene.remove(view.model.root, view.shadow, view.name.sprite);
+        this.scene.remove(view.model.root, view.shadow, view.name.sprite, ...view.trails.map((t) => t.mesh));
         this.cars.delete(id);
       }
     }
@@ -122,7 +126,7 @@ export class GameRenderer {
       let view = this.cars.get(c.id);
       const body = opts.bodyOf?.(c.id) ?? 'octane';
       if (view && view.model.bodyType !== body) {
-        this.scene.remove(view.model.root, view.shadow, view.name.sprite);
+        this.scene.remove(view.model.root, view.shadow, view.name.sprite, ...view.trails.map((t) => t.mesh));
         this.cars.delete(c.id);
         view = undefined;
       }
@@ -131,8 +135,9 @@ export class GameRenderer {
         const shadow = createBlobShadow(75, 0.45);
         shadow.scale.set(1.5, 1, 1);
         const name = createNameTag(c.name, c.team);
-        this.scene.add(model.root, shadow, name.sprite);
-        view = { model, shadow, name, team: c.team, wheelSpin: 0, steer: 0, trailTimer: 0 };
+        const trails = [0, 1].map(() => new TrailRibbon(new THREE.Color(1.6, 1.7, 1.9), 3.5));
+        this.scene.add(model.root, shadow, name.sprite, ...trails.map((t) => t.mesh));
+        view = { model, shadow, name, team: c.team, wheelSpin: 0, steer: 0, trailTimer: 0, smokeTimer: 0, trails };
         this.cars.set(c.id, view);
       }
       if (view.team !== c.team) {
@@ -196,19 +201,35 @@ export class GameRenderer {
             drag: 2,
           });
         }
+        // grey smoke trailing the flame, like the default boost
+        view.smokeTimer += dt;
+        while (view.smokeTimer > 1 / 45) {
+          view.smokeTimer -= 1 / 45;
+          const jitter = new THREE.Vector3((Math.random() - 0.5) * 50, (Math.random() - 0.5) * 50, (Math.random() - 0.5) * 50);
+          this.smokeFx.emit({
+            pos: nozzle.clone().add(back.clone().multiplyScalar(70)),
+            vel: back.clone().multiplyScalar(120 + Math.random() * 80).add(jitter).add(new THREE.Vector3(0, 40, 0)),
+            life: 0.9 + Math.random() * 0.4,
+            size0: 26,
+            size1: 120,
+            color: new THREE.Color('#d5d9df').multiplyScalar(0.85 + Math.random() * 0.15),
+            drag: 1.6,
+            gravity: 60,
+            alpha: 0.32,
+          });
+        }
       }
-      // Supersonic streaks
-      if (car.isSupersonic && !car.demolished && Math.random() < 0.6) {
-        const side = new THREE.Vector3(0, (Math.random() - 0.3) * 40, (Math.random() < 0.5 ? -1 : 1) * 40).applyQuaternion(root.quaternion);
-        this.boostFx.emit({
-          pos: root.position.clone().add(side),
-          vel: new THREE.Vector3(),
-          life: 0.25,
-          size0: 14,
-          size1: 2,
-          color: new THREE.Color('#ffffff'),
-        });
-      }
+      // Supersonic: two white wind lines from the rear wheels
+      root.updateMatrixWorld();
+      const up = new THREE.Vector3(0, 1, 0).applyQuaternion(root.quaternion);
+      const rear = view.model.wheels.filter((w) => !w.front);
+      view.trails.forEach((trail, i) => {
+        if (teleported) trail.clear();
+        const wheel = rear[i];
+        if (!wheel) return;
+        const at = wheel.mesh.getWorldPosition(new THREE.Vector3()).add(up.clone().multiplyScalar(-4));
+        trail.update(this.time, car.isSupersonic && !car.demolished, at, up);
+      });
 
       // Blob shadow on the closest surface below the car
       this.placeShadow(view.shadow, pos, car.demolished ? 0 : 1, 70);
@@ -241,7 +262,7 @@ export class GameRenderer {
     for (const s of this.shockwaves) {
       s.t += dt;
       const k = s.t / 0.9;
-      s.mesh.scale.setScalar(1 + k * 25);
+      s.mesh.scale.setScalar(1 + k * (s.grow ?? 25));
       (s.mesh.material as THREE.MeshBasicMaterial).opacity = Math.max(0, 0.6 * (1 - k));
     }
     this.shockwaves = this.shockwaves.filter((s) => {
@@ -340,9 +361,21 @@ export class GameRenderer {
         case 'goal': {
           const color = TEAM_COLORS[e.team];
           const pos = toThree(e.pos);
+          // team-colored sparks, a two-layer fireball and smoke that rises and spreads
           this.burstFx.burst(pos, 900, 3500, color, 2.2, 140, -600);
           this.burstFx.burst(pos, 300, 1500, new THREE.Color('#ffffff'), 1.5, 90, -300);
-          this.smokeFx.burst(pos, 120, 600, new THREE.Color('#555a66'), 3, 400, 80);
+          this.burstFx.burst(pos, 260, 900, new THREE.Color(3, 1.6, 0.5), 0.9, 360, 0, 1.6, 0.9);
+          this.burstFx.burst(pos, 160, 500, color.clone().multiplyScalar(2.2), 1.2, 300, 0, 2, 0.8);
+          this.smokeFx.burst(pos, 160, 700, new THREE.Color('#4a4f5a'), 3.5, 260, 260, 3.2, 0.55);
+          // flat shockwave ring sweeping over the floor
+          const ring = new THREE.Mesh(
+            new THREE.RingGeometry(36, 44, 96),
+            new THREE.MeshBasicMaterial({ color: color.clone().multiplyScalar(2), transparent: true, opacity: 0.6, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide }),
+          );
+          ring.rotation.x = -Math.PI / 2;
+          ring.position.set(pos.x, 6, pos.z);
+          this.scene.add(ring);
+          this.shockwaves.push({ mesh: ring, t: 0, grow: 60 });
           const sw = new THREE.Mesh(
             new THREE.SphereGeometry(40, 24, 16),
             new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.6, depthWrite: false, blending: THREE.AdditiveBlending }),

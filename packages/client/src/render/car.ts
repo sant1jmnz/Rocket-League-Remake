@@ -222,7 +222,12 @@ export function createCarModel(team: 0 | 1, bodyType: CarBody = 'octane'): CarMo
   outer.rotation.z = Math.PI / 2;
   core.position.x = -17;
   outer.position.x = -35;
-  flame.add(outer, core);
+  // long faint tail of the flame (the default boost reaches about a car length)
+  const tailMat = new THREE.MeshBasicMaterial({ color: outerColor(team).multiplyScalar(0.5), transparent: true, opacity: 0.35, blending: THREE.AdditiveBlending, depthWrite: false });
+  const tail = new THREE.Mesh(new THREE.ConeGeometry(10, 120, 16, 1, true), tailMat);
+  tail.rotation.z = Math.PI / 2;
+  tail.position.x = -60;
+  flame.add(tail, outer, core);
   flame.position.set(nozzle.x - 4, nozzle.y, 0);
   flame.visible = false;
   body.add(flame);
@@ -240,6 +245,7 @@ export function createCarModel(team: 0 | 1, bodyType: CarBody = 'octane'): CarMo
       accent.color.set(TEAM_ACCENT[t]);
       accent.emissive.set(TEAM_ACCENT[t]);
       outerMat.color.copy(outerColor(t));
+      tailMat.color.copy(outerColor(t).multiplyScalar(0.5));
       nozInnerMat.emissive.set(t === 0 ? '#3aa0ff' : '#ff8a20');
     },
     setBoost(on: boolean, t: number) {
@@ -247,6 +253,8 @@ export function createCarModel(team: 0 | 1, bodyType: CarBody = 'octane'): CarMo
       if (!on) return;
       outer.scale.set(1, 0.85 + Math.sin(t * 90) * 0.1 + Math.random() * 0.15, 1);
       core.scale.set(1, 0.9 + Math.random() * 0.2, 1);
+      const w = 0.9 + Math.random() * 0.2;
+      tail.scale.set(w, 0.75 + Math.sin(t * 53) * 0.12 + Math.random() * 0.25, w);
     },
   };
 }
