@@ -98,7 +98,8 @@ export function setupEnvironment(renderer: THREE.WebGLRenderer, scene: THREE.Sce
   clouds.renderOrder = -1;
   scene.add(clouds);
 
-  scene.fog = new THREE.Fog('#a9c9ea', 30000, 60000);
+  // atmospheric haze: the far stands and roof fade slightly into the horizon color
+  scene.fog = new THREE.Fog('#b6d2ee', 14000, 42000);
 
   // Lights
   scene.add(new THREE.HemisphereLight('#cfe4ff', '#4a5a3a', 0.55));

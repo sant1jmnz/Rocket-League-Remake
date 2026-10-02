@@ -212,9 +212,10 @@ export function buildStadium(): THREE.Group {
   const white = () => new THREE.Color('#ffffff');
 
   // Concrete tiers: white structure, rows slightly darker so the steps read from afar
-  const concrete = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.75, metalness: 0.05, side: THREE.DoubleSide });
+  // matte, with little sky reflection, so the sunlit tiers don't glare and bloom
+  const concrete = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.92, metalness: 0, envMapIntensity: 0.4, side: THREE.DoubleSide });
   const SEAT = new THREE.Color('#3b4049');
-  const RISER = new THREE.Color('#a4a9b1');
+  const RISER = new THREE.Color('#8b919a');
   const rowShade = (_p: PathPoint, _z: number, j: number) => (j > 0 && SEAT_ROLE(j) === 'seat' ? SEAT : RISER);
   for (const t of [LOWER, UPPER]) {
     const prof = tierProfile(t);
@@ -228,7 +229,7 @@ export function buildStadium(): THREE.Group {
   const lowerBack = LOWER.s0 + LOWER.rows * LOWER.depth;
   grp.add(
     new THREE.Mesh(
-      sweep(path, [[lowerBack, lowerTop], [UPPER.s0, lowerTop], [UPPER.s0, UPPER.z0 - 900]], () => new THREE.Color('#b4b8be')),
+      sweep(path, [[lowerBack, lowerTop], [UPPER.s0, lowerTop], [UPPER.s0, UPPER.z0 - 900]], () => new THREE.Color('#979ca4')),
       concrete,
     ),
   );

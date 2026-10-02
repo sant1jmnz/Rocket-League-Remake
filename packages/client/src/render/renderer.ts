@@ -215,7 +215,7 @@ export class GameRenderer {
             color: new THREE.Color('#d5d9df').multiplyScalar(0.85 + Math.random() * 0.15),
             drag: 1.6,
             gravity: 60,
-            alpha: 0.32,
+            alpha: 0.45,
           });
         }
       }
