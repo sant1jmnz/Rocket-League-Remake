@@ -17,7 +17,8 @@ import {
   TEAM_COLORS,
   createBallModel,
   createBlobShadow,
-  createNameSprite,
+  createNameTag,
+  type NameTag,
 } from './models';
 import { createCarModel, type CarModel } from './car';
 
@@ -31,7 +32,7 @@ import { CameraController } from '../camera/camera';
 interface CarView {
   model: CarModel;
   shadow: THREE.Mesh;
-  name: THREE.Sprite;
+  name: NameTag;
   team: 0 | 1;
   wheelSpin: number;
   steer: number;
@@ -110,9 +111,10 @@ export class GameRenderer {
 
   private syncCars(state: GameState, opts: RenderOptions) {
     const ids = new Set(state.cars.map((c) => c.id));
+    const localTeam = state.cars.find((c) => c.id === opts.localCarId)?.team ?? null;
     for (const [id, view] of this.cars) {
       if (!ids.has(id)) {
-        this.scene.remove(view.model.root, view.shadow, view.name);
+        this.scene.remove(view.model.root, view.shadow, view.name.sprite);
         this.cars.delete(id);
       }
     }
@@ -120,7 +122,7 @@ export class GameRenderer {
       let view = this.cars.get(c.id);
       const body = opts.bodyOf?.(c.id) ?? 'octane';
       if (view && view.model.bodyType !== body) {
-        this.scene.remove(view.model.root, view.shadow, view.name);
+        this.scene.remove(view.model.root, view.shadow, view.name.sprite);
         this.cars.delete(c.id);
         view = undefined;
       }
@@ -128,8 +130,8 @@ export class GameRenderer {
         const model = createCarModel(c.team, opts.bodyOf?.(c.id));
         const shadow = createBlobShadow(75, 0.45);
         shadow.scale.set(1.5, 1, 1);
-        const name = createNameSprite(c.name, c.team === 0 ? '#9fd0ff' : '#ffc890');
-        this.scene.add(model.root, shadow, name);
+        const name = createNameTag(c.name, c.team);
+        this.scene.add(model.root, shadow, name.sprite);
         view = { model, shadow, name, team: c.team, wheelSpin: 0, steer: 0, trailTimer: 0 };
         this.cars.set(c.id, view);
       }
@@ -137,7 +139,9 @@ export class GameRenderer {
         view.model.setTeam(c.team);
         view.team = c.team;
       }
-      view.name.visible = opts.showNames && c.id !== opts.localCarId && !c.demolished;
+      view.name.sprite.visible = opts.showNames && c.id !== opts.localCarId && !c.demolished;
+      // teammates show their boost under the name, like the real game
+      view.name.setBoost(localTeam !== null && c.team === localTeam && c.id !== opts.localCarId ? c.boost : null);
     }
   }
 
@@ -209,7 +213,7 @@ export class GameRenderer {
       // Blob shadow on the closest surface below the car
       this.placeShadow(view.shadow, pos, car.demolished ? 0 : 1, 70);
       view.shadow.rotation.z = Math.atan2(fwd.y, fwd.x);
-      view.name.position.copy(root.position).add(new THREE.Vector3(0, 130, 0));
+      view.name.sprite.position.copy(root.position).add(new THREE.Vector3(0, 120, 0));
     }
 
     // Ball
@@ -302,7 +306,7 @@ export class GameRenderer {
     for (const v of this.cars.values()) {
       v.model.root.visible = false;
       v.shadow.visible = false;
-      v.name.visible = false;
+      v.name.sprite.visible = false;
     }
     this.ball.visible = false;
     this.ballShadow.visible = false;

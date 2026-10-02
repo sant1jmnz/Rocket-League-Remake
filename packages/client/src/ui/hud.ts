@@ -1,4 +1,4 @@
-import { TEAM_NAMES, vlen, type GameEvent, type GameState } from '@rl/shared';
+import { MATCH, TEAM_NAMES, vlen, type GameEvent, type GameState } from '@rl/shared';
 
 const el = <K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, html?: string) => {
   const e = document.createElement(tag);
@@ -16,6 +16,14 @@ export function formatClock(seconds: number, overtime: boolean): string {
 
 const escapeHtml = (s: string) =>
   s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
+
+// Small inline icons for the play feed (drawn here, no external assets)
+const ICON = {
+  goal: '<svg viewBox="0 0 24 24" class="ico"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="M12 7l4 3-1.5 4.6h-5L8 10z" fill="currentColor"/></svg>',
+  demo: '<svg viewBox="0 0 24 24" class="ico"><path d="M12 1l2.2 6.3L20 4.5l-2.7 5.9L23 12l-5.7 1.6L20 19.5l-5.8-2.8L12 23l-2.2-6.3L4 19.5l2.7-5.9L1 12l5.7-1.6L4 4.5l5.8 2.8z" fill="currentColor"/></svg>',
+  save: '<svg viewBox="0 0 24 24" class="ico"><path d="M12 2l8 3v6c0 5-3.4 9.4-8 11-4.6-1.6-8-6-8-11V5z" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="M8 12l3 3 5-6" fill="none" stroke="currentColor" stroke-width="2.2"/></svg>',
+  assist: '<svg viewBox="0 0 24 24" class="ico"><path d="M3 12h13M11 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2.6"/></svg>',
+};
 
 /** In-game overlay: scoreboard, clock, boost meter, banners, kill feed and Tab scoreboard. */
 export class Hud {
@@ -35,6 +43,9 @@ export class Hud {
   private speedTag = el('div', 'speed-tag');
   private replayTag = el('div', 'replay-tag hidden');
   private replaySkip = el('div', 'replay-skip hidden');
+  private points = el('div', 'points');
+  private intro = el('div', 'intro hidden');
+  private introKey = '';
   private messageTimer = 0;
   private lastPhase = '';
 
@@ -55,19 +66,30 @@ export class Hud {
     </svg>`;
     this.boostRing = this.boostWrap.querySelector('circle.fill')!;
     this.boostWrap.append(this.boostValue);
-    this.root.append(top, this.center, this.sub, this.feed, this.board, this.boostWrap, this.ballCamTag, this.statusTag, this.speedTag, this.chatMenu, this.replayTag, this.replaySkip);
+    this.root.append(top, this.center, this.sub, this.feed, this.board, this.boostWrap, this.ballCamTag, this.statusTag, this.speedTag, this.chatMenu, this.replayTag, this.replaySkip, this.points, this.intro);
   }
 
   show(v: boolean) {
     this.root.style.display = v ? '' : 'none';
   }
 
-  private banner(text: string, sub = '', seconds = 2.5, cls = '') {
+  /** Big center message; `subHtml` is trusted markup (callers escape names). */
+  private banner(text: string, subHtml = '', seconds = 2.5, cls = '', subCls = '') {
     this.center.textContent = text;
     this.center.className = `center-msg show ${cls}`;
-    this.sub.textContent = sub;
-    this.sub.className = `center-sub ${sub ? 'show' : ''}`;
+    this.sub.innerHTML = subHtml;
+    this.sub.className = `center-sub ${subHtml ? 'show' : ''} ${subCls}`;
     this.messageTimer = seconds;
+  }
+
+  /** Points notice for the local player, stacked right of center like the real game. */
+  private award(label: string, points: number) {
+    const item = el('div', 'point-item', `<span class="pl">${label}</span><span class="pv">+${points}</span>`);
+    this.points.prepend(item);
+    requestAnimationFrame(() => item.classList.add('in'));
+    setTimeout(() => item.classList.add('out'), 2400);
+    setTimeout(() => item.remove(), 2900);
+    while (this.points.children.length > 4) this.points.lastElementChild?.remove();
   }
 
   private chatMenu = el('div', 'chat-menu hidden');
@@ -128,27 +150,27 @@ export class Hud {
           const assist = state.cars.find((c) => c.id === e.assistId);
           const lastTouch = state.lastTouches.at(-1);
           const ownGoal = !scorer && lastTouch && lastTouch.team !== e.team ? state.cars.find((c) => c.id === lastTouch.carId) : undefined;
-          const who = scorer
-            ? `${scorer.name}${assist ? ` (asistencia: ${assist.name})` : ''}`
-            : ownGoal
-              ? `Autogol de ${ownGoal.name}`
-              : '';
-          this.banner('¡GOL!', `${who ? `${who} · ` : ''}${kph} km/h`, 3, `goal t${e.team}`);
+          const who = scorer ? name(scorer.id) : ownGoal ? `Autogol de ${name(ownGoal.id)}` : TEAM_NAMES[e.team];
+          const card = `<span class="gc-who">${who}</span>${assist ? `<span class="gc-assist">${ICON.assist} ${name(assist.id)}</span>` : ''}<span class="gc-speed">${kph} KM/H</span>`;
+          this.banner('¡GOL!', card, 3, `goal t${e.team}`, `goal-card t${e.team}`);
           if (!state.freeplay) {
-            this.pushFeed(`⚽ ${scorer ? name(scorer.id) : ownGoal ? `Autogol de ${name(ownGoal.id)}` : 'Gol'} · ${TEAM_NAMES[e.team]}`);
+            this.pushFeed(`${scorer ? name(scorer.id) : ownGoal ? name(ownGoal.id) : TEAM_NAMES[e.team]} <span class="fi t${e.team}">${ICON.goal}</span>${assist ? ` <span class="fi-sub">${ICON.assist} ${name(assist.id)}</span>` : ''}`);
+            if (scorer?.id === localCarId) this.award('GOL', MATCH.POINTS_GOAL);
+            if (assist?.id === localCarId) this.award('ASISTENCIA', MATCH.POINTS_ASSIST);
           }
           break;
         }
         case 'demo':
-          this.pushFeed(`💥 ${name(e.attacker)} demolió a ${name(e.victim)}`);
+          this.pushFeed(`${name(e.attacker)} <span class="fi demo">${ICON.demo}</span> ${name(e.victim)}`);
           if (e.victim === localCarId) this.banner('DEMOLIDO', '', 1.5, 'demo');
+          if (e.attacker === localCarId) this.award('DEMOLICIÓN', MATCH.POINTS_DEMO);
           break;
         case 'save':
-          this.pushFeed(`🧤 ¡Atajada de ${name(e.carId)}!`);
-          if (e.carId === localCarId) this.banner('¡ATAJADA!', '', 1.2, 'small');
+          this.pushFeed(`${name(e.carId)} <span class="fi save">${ICON.save}</span>`);
+          if (e.carId === localCarId) this.award('ATAJADA', MATCH.POINTS_SAVE);
           break;
         case 'shot':
-          if (e.carId === localCarId) this.pushFeed(`🎯 Tiro al arco`);
+          if (e.carId === localCarId) this.award('TIRO AL ARCO', MATCH.POINTS_SHOT);
           break;
         case 'overtime':
           this.banner('TIEMPO EXTRA', 'Gol de oro', 2.5);
@@ -199,9 +221,35 @@ export class Hud {
     if (state.phase !== this.lastPhase) {
       this.lastPhase = state.phase;
     }
+    this.updateIntro(state, localCarId);
 
     this.board.classList.toggle('hidden', !ui.scoreboard); // results get their own screen when the match ends
     if (!this.board.classList.contains('hidden')) this.renderBoard(state, localCarId);
+  }
+
+  /** Pre-match presentation: arena, mode and both rosters during the opening countdown. */
+  private updateIntro(state: GameState, localCarId: number | null) {
+    const opening = state.phase === 'countdown' && !state.overtime && state.score[0] + state.score[1] === 0 && !state.clockRunning;
+    if (!opening) {
+      if (this.introKey) {
+        this.intro.className = 'intro out';
+        this.introKey = '';
+      }
+      return;
+    }
+    const roster = (team: 0 | 1) =>
+      state.cars
+        .filter((c) => c.team === team)
+        .map((c) => `<div class="ir${c.id === localCarId ? ' me' : ''}">${escapeHtml(c.name)}${c.isBot ? ' <small>BOT</small>' : ''}</div>`)
+        .join('');
+    const size = Math.max(1, ...[0, 1].map((t) => state.cars.filter((c) => c.team === t).length));
+    const key = state.cars.map((c) => `${c.id}:${c.team}:${c.name}`).join('|');
+    if (key === this.introKey) return;
+    this.introKey = key;
+    this.intro.innerHTML = `<div class="intro-arena"><span>DFH STADIUM</span><small>${size}v${size}</small></div>
+      <div class="intro-teams"><div class="it t0"><div class="it-name">${TEAM_NAMES[0]}</div>${roster(0)}</div>
+      <div class="it-vs">VS</div><div class="it t1"><div class="it-name">${TEAM_NAMES[1]}</div>${roster(1)}</div></div>`;
+    this.intro.className = 'intro';
   }
 
   private renderBoard(state: GameState, localCarId: number | null) {

@@ -294,23 +294,66 @@ export function createBlobShadow(radius: number, opacity = 0.5): THREE.Mesh {
 }
 
 /** Text sprite used for player names. */
-export function createNameSprite(text: string, color: string): THREE.Sprite {
+export interface NameTag {
+  sprite: THREE.Sprite;
+  /** Shows a boost bar under the name (teammates), or hides it with null. */
+  setBoost(value: number | null): void;
+}
+
+/** Player tag above a car: dark plate with a team-colored edge, constant size on screen. */
+export function createNameTag(text: string, team: 0 | 1): NameTag {
+  const W = 512;
+  const H = 128;
   const c = document.createElement('canvas');
-  c.width = 512;
-  c.height = 96;
+  c.width = W;
+  c.height = H;
   const g = c.getContext('2d')!;
-  g.font = 'bold 56px system-ui, sans-serif';
-  g.textAlign = 'center';
-  g.textBaseline = 'middle';
-  g.lineWidth = 10;
-  g.strokeStyle = 'rgba(0,0,0,0.75)';
-  g.strokeText(text, 256, 48);
-  g.fillStyle = color;
-  g.fillText(text, 256, 48);
+  const teamCss = team === 0 ? '#3d8bff' : '#ff8a2a';
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
-  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true }));
-  sprite.scale.set(240, 45, 1);
+  let shown: number | null | undefined;
+  const draw = (boost: number | null) => {
+    g.clearRect(0, 0, W, H);
+    g.font = 'italic 800 46px "Exo 2", system-ui, sans-serif';
+    const tw = Math.min(W - 60, g.measureText(text).width + 56);
+    const x0 = (W - tw) / 2;
+    const h = boost === null ? 64 : 82;
+    const y0 = 8;
+    g.beginPath();
+    g.moveTo(x0 + 14, y0);
+    g.lineTo(x0 + tw, y0);
+    g.lineTo(x0 + tw - 14, y0 + h);
+    g.lineTo(x0, y0 + h);
+    g.closePath();
+    g.fillStyle = 'rgba(4,10,30,0.72)';
+    g.fill();
+    g.fillStyle = teamCss;
+    g.fillRect(x0 + 10, y0 + h - 5, tw - 20, 5);
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    g.fillStyle = '#ffffff';
+    g.fillText(text, W / 2, y0 + 34, tw - 40);
+    if (boost !== null) {
+      const bw = tw - 60;
+      g.fillStyle = 'rgba(255,255,255,0.18)';
+      g.fillRect((W - bw) / 2, y0 + 62, bw, 9);
+      g.fillStyle = '#ffb21e';
+      g.fillRect((W - bw) / 2, y0 + 62, (bw * Math.max(0, Math.min(100, boost))) / 100, 9);
+    }
+    tex.needsUpdate = true;
+  };
+  draw(null);
+  shown = null;
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true, sizeAttenuation: false }));
+  sprite.scale.set(0.2, 0.05, 1);
   sprite.renderOrder = 10;
-  return sprite;
+  return {
+    sprite,
+    setBoost(value) {
+      const v = value === null ? null : Math.round(value / 5) * 5;
+      if (v === shown) return;
+      shown = v;
+      draw(v);
+    },
+  };
 }
