@@ -106,8 +106,13 @@ export class CameraController {
     this.blend += Math.sign(bt - this.blend) * Math.min(Math.abs(bt - this.blend), rate * dt);
 
     const flat = (v: V) => v.sub(this.up.clone().multiplyScalar(v.dot(this.up)));
+    // Car cam heading: the car's nose while it is roughly level; in the air when it is pitched
+    // or flipping, the direction of travel (the real camera does not spin with flips).
+    const velFlat = flat(new THREE.Vector3(car.vel.x, car.vel.y, car.vel.z));
+    const level = Math.abs(fwd.z) < 0.55 && cup.z > 0.2;
     let carDir = flat(new THREE.Vector3(fwd.x, fwd.y, fwd.z));
-    if (carDir.lengthSq() < 0.05) carDir = flat(new THREE.Vector3(car.vel.x, car.vel.y, car.vel.z));
+    if (!car.onGround && (!level || carDir.lengthSq() < 0.05) && velFlat.lengthSq() > 300 * 300) carDir = velFlat.clone();
+    if (carDir.lengthSq() < 0.05) carDir = velFlat.clone();
     if (carDir.lengthSq() < 1e-6) carDir = this.dir.clone();
     carDir.normalize();
     let targetDir = carDir;
@@ -131,15 +136,18 @@ export class CameraController {
     this.swivel.y += (swivelInput.y - this.swivel.y) * Math.min(1, swRate * dt);
     const viewDir = this.dir.clone().applyAxisAngle(this.up, -this.swivel.x * Math.PI);
 
-    // Positional lag: lower stiffness = the camera trails further behind at speed
-    const lagRate = 6 + s.stiffness * 30;
-    this.lagPos.lerp(carPos, 1 - Math.exp(-lagRate * dt));
-    if (this.lagPos.distanceTo(carPos) > 600) this.lagPos.copy(carPos);
+    // The camera is attached to the car; only the vertical bounce of the suspension is smoothed.
+    // Lower stiffness pulls the camera further back at high speed, as in the game.
+    const along = carPos.clone().sub(this.lagPos).dot(this.up);
+    this.lagPos.copy(carPos).sub(this.up.clone().multiplyScalar(along * Math.exp(-25 * dt)));
+    if (this.lagPos.distanceTo(carPos) > 200) this.lagPos.copy(carPos);
+    const speed = Math.hypot(car.vel.x, car.vel.y, car.vel.z);
+    const stretch = 1 + (1 - s.stiffness) * 0.35 * Math.min(1, speed / 2300);
 
     const camPos = this.lagPos
       .clone()
       .add(this.up.clone().multiplyScalar(s.height))
-      .sub(viewDir.clone().multiplyScalar(s.distance));
+      .sub(viewDir.clone().multiplyScalar(s.distance * stretch));
     // Keep the camera inside the stadium
     for (let i = 0; i < 2; i++) {
       const p = { x: camPos.x, y: camPos.y, z: camPos.z };
