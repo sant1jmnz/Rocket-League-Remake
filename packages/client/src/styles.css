@@ -242,7 +242,7 @@ table.controls td { padding: 4px 8px; border-top: 1px solid var(--line); }
 }
 
 /* Points notices (right of center) */
-.points { position: absolute; right: 23%; top: 40%; display: flex; flex-direction: column; gap: 6px; align-items: flex-end; pointer-events: none; }
+.points { position: absolute; right: 3%; top: 30%; display: flex; flex-direction: column; gap: 6px; align-items: flex-end; pointer-events: none; }
 .point-item { display: flex; align-items: stretch; font-family: var(--display); font-style: italic; transform: translateX(40px); opacity: 0; transition: transform .25s cubic-bezier(.2,1.4,.4,1), opacity .2s; }
 .point-item.in { transform: none; opacity: 1; }
 .point-item.out { opacity: 0; transform: translateX(-20px); transition: opacity .45s, transform .45s; }
