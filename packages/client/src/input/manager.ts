@@ -116,6 +116,8 @@ export class InputManager {
     let yaw = k('yawRight') - k('yawLeft');
     let roll = k('airRollRight') - k('airRollLeft');
     let airRoll = this.key('airRoll');
+    let padRollL = false;
+    let padRollR = false;
     let jump = this.key('jump');
     let boost = this.key('boost');
     let handbrake = this.key('powerslide');
@@ -142,8 +144,16 @@ export class InputManager {
       // Stick back (down) = nose up, like the game's default
       const p = this.settings.invertPitch ? -ly : ly;
       if (Math.abs(p) > Math.abs(pitch)) pitch = p;
-      if (btn('airRollLeft')) roll = -1;
-      if (btn('airRollRight')) roll = 1;
+      if (btn('airRollLeft')) {
+        roll = -1;
+        padRollL = true;
+      }
+      if (btn('airRollRight')) {
+        roll = 1;
+        padRollR = true;
+      }
+      // both bumpers at once: opposite air rolls (stall input), see below
+      if (padRollL && padRollR) roll = 0;
       airRoll ||= btn('airRoll');
       jump ||= btn('jump');
       boost ||= btn('boost');
@@ -158,9 +168,18 @@ export class InputManager {
     }
 
     // Air roll: while held, yaw input becomes roll
+    const rollL = k('airRollLeft') > 0 || padRollL || (airRoll && k('yawLeft') > 0);
+    const rollR = k('airRollRight') > 0 || padRollR || (airRoll && k('yawRight') > 0);
     if (airRoll) {
       if (roll === 0) roll = yaw;
       yaw = 0;
+    }
+    // Stall: holding one air roll direction and pressing the opposite one together with the jump
+    // makes the dodge directions cancel (no flip impulse, the car hangs in the air). The two keys
+    // would otherwise cancel into "no input" and give a plain double jump.
+    if (jump && rollL && rollR) {
+      roll = 1;
+      yaw = -1;
     }
 
     input.throttle = throttle;

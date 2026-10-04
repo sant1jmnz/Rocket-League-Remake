@@ -266,6 +266,26 @@ describe('RocketSim mechanics', () => {
     expect(car.pos.z).toBeLessThan(18);
   });
 
+  it('a stall (air roll one way + dodge the other way) adds no flip impulse', () => {
+    const run2 = (second: Partial<ControllerInput>) => {
+      const s = freeplayWithCar();
+      const car = s.cars[0];
+      car.pos = v3(0, -2000, 17);
+      car.vel = v3(0, 300, 0);
+      run(s, 0.05, { jump: true });
+      run(s, 0.5, { roll: -1 });
+      const before = { x: car.vel.x, y: car.vel.y };
+      run(s, 0.05, { roll: -1, jump: true, ...second });
+      return { dx: car.vel.x - before.x, dy: car.vel.y - before.y, flipped: car.hasFlipped };
+    };
+    const stall = run2({ yaw: 1 });
+    expect(stall.flipped).toBe(true);
+    expect(Math.hypot(stall.dx, stall.dy)).toBeLessThan(5);
+    // without the opposite input the same roll direction is a real side flip
+    const side = run2({});
+    expect(Math.hypot(side.dx, side.dy)).toBeGreaterThan(300);
+  });
+
   it('a flip stops the fall while it rotates (z damping)', () => {
     const s = freeplayWithCar();
     const car = s.cars[0];

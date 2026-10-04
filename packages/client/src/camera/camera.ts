@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { arenaDistance, arenaNormal, qforward, qup, type Quat, type Vec3 } from '@rl/shared';
+import { arenaQuery, qforward, qup, raycastArena, type Quat, type Vec3 } from '@rl/shared';
 import { toThreeXYZ } from '../render/coords';
 
 // Car cam / ball cam modelled after the real game's camera settings.
@@ -48,6 +48,12 @@ export class CameraController {
   private dir = new THREE.Vector3(1, 0, 0); // sim space, horizontal-ish
   private up = new THREE.Vector3(0, 0, 1);
   private lagPos = new THREE.Vector3();
+  private lastCarPos = new THREE.Vector3();
+  private lastLook = new THREE.Vector3();
+  /** nose direction on the floor plane, continuous through flips */
+  private heading = new THREE.Vector3(1, 0, 0);
+  /** fraction of the boom that is free of geometry (smoothed) */
+  private boomFree = 1;
   private initialized = false;
   private swivel = new THREE.Vector2();
   private shakeTime = 0;
@@ -87,6 +93,12 @@ export class CameraController {
     this.camera.lookAt(toThreeXYZ(ball.x * 0.7, ball.y * 0.7, 0));
   }
 
+  /** Rotates `dir` towards `target` about `up` by a fraction of the signed angle between them. */
+  private rotateToward(dir: V, target: V, up: V, k: number) {
+    const angle = Math.atan2(up.dot(new THREE.Vector3().crossVectors(dir, target)), dir.dot(target));
+    dir.applyAxisAngle(up, angle * k).normalize();
+  }
+
   update(dt: number, car: CameraTarget, ball: Vec3 | null, swivelInput: { x: number; y: number }) {
     const s = this.settings;
     const carPos = new THREE.Vector3(car.pos.x, car.pos.y, car.pos.z);
@@ -94,15 +106,21 @@ export class CameraController {
     const cup = qup(car.quat);
     const worldUp = new THREE.Vector3(0, 0, 1);
 
+    // Respawns and kickoffs teleport the car: start over from its nose direction
+    if (this.initialized && carPos.distanceTo(this.lastCarPos) > 400) this.initialized = false;
+    this.lastCarPos.copy(carPos);
+
     if (!this.initialized) {
       this.lagPos.copy(carPos);
       this.dir.set(fwd.x, fwd.y, 0).normalize();
+      this.heading.copy(this.dir);
       this.up.copy(worldUp);
       this.blend = this.ballCam ? 1 : 0;
+      this.lastLook.set(0, 0, 0);
       this.initialized = true;
     }
 
-    // Camera up follows the surface while driving on walls
+    // Camera up follows the surface while driving on walls, world up in the air
     const targetUp = car.onGround ? new THREE.Vector3(cup.x, cup.y, cup.z) : worldUp;
     this.up.lerp(targetUp, 1 - Math.exp(-(car.onGround ? 5 : 2.5) * dt)).normalize();
 
@@ -112,29 +130,32 @@ export class CameraController {
     this.blend += Math.sign(bt - this.blend) * Math.min(Math.abs(bt - this.blend), rate * dt);
 
     const flat = (v: V) => v.sub(this.up.clone().multiplyScalar(v.dot(this.up)));
-    // Car cam heading: the car's nose while it is roughly level; in the air when it is pitched
-    // or flipping, the direction of travel (the real camera does not spin with flips).
-    const velFlat = flat(new THREE.Vector3(car.vel.x, car.vel.y, car.vel.z));
-    const level = Math.abs(fwd.z) < 0.55 && cup.z > 0.2;
-    let carDir = flat(new THREE.Vector3(fwd.x, fwd.y, fwd.z));
-    if (!car.onGround && (!level || carDir.lengthSq() < 0.05) && velFlat.lengthSq() > 300 * 300) carDir = velFlat.clone();
-    if (carDir.lengthSq() < 0.05) carDir = velFlat.clone();
-    if (carDir.lengthSq() < 1e-6) carDir = this.dir.clone();
-    carDir.normalize();
-    let targetDir = carDir;
+    // Car heading = the nose direction projected on the camera's floor plane. It ignores roll
+    // (air roll never moves the camera) and is kept continuous through flips: when the nose
+    // swings past vertical the projection reverses, so it is flipped back instead of spinning the
+    // camera 180°.
+    const noseFlat = flat(new THREE.Vector3(fwd.x, fwd.y, fwd.z));
+    const noseLen = noseFlat.length();
+    if (noseLen > 0.25) {
+      noseFlat.divideScalar(noseLen);
+      if (noseFlat.dot(this.heading) < 0) noseFlat.negate();
+      this.heading.copy(noseFlat);
+    }
+    const carDir = this.heading.clone();
+    let targetDir = carDir.clone();
     let ballDir: V | null = null;
     if (ball) {
       ballDir = flat(new THREE.Vector3(ball.x - carPos.x, ball.y - carPos.y, ball.z - carPos.z));
       if (ballDir.lengthSq() < 100) ballDir = carDir.clone();
       ballDir.normalize();
-      targetDir = carDir.clone().lerp(ballDir, this.blend);
-      if (targetDir.lengthSq() < 1e-4) targetDir = ballDir.clone();
-      targetDir.normalize();
+      // Ball cam always faces the ball, also when it is behind the car (short way round)
+      const ang = Math.atan2(this.up.dot(new THREE.Vector3().crossVectors(carDir, ballDir)), carDir.dot(ballDir));
+      targetDir = carDir.clone().applyAxisAngle(this.up, ang * this.blend).normalize();
     }
     // Smoothly rotate towards the target direction (car cam lags a bit in the air)
     const turnRate = this.blend > 0.5 ? 9 : car.onGround ? 10 : 6;
-    this.dir.lerp(targetDir, 1 - Math.exp(-turnRate * dt));
     flat(this.dir).normalize();
+    this.rotateToward(this.dir, targetDir, this.up, 1 - Math.exp(-turnRate * dt));
 
     // Swivel (right stick)
     const swRate = s.swivelSpeed * 2;
@@ -151,18 +172,31 @@ export class CameraController {
     const speed = Math.hypot(car.vel.x, car.vel.y, car.vel.z);
     const stretch = 1 + (1 - s.stiffness) * 0.35 * Math.min(1, speed / 2300);
 
-    const camPos = this.lagPos
+    // Camera collision: shorten the boom when the stadium (walls, goal backs, ceiling) is in the way
+    const anchor = this.lagPos.clone().add(this.up.clone().multiplyScalar(Math.min(s.height, 60)));
+    const wanted = this.lagPos
       .clone()
       .add(this.up.clone().multiplyScalar(s.height))
       .sub(viewDir.clone().multiplyScalar(s.distance * stretch));
-    // Keep the camera inside the stadium
+    const boom = wanted.clone().sub(anchor);
+    const boomLen = boom.length();
+    let free = 1;
+    if (boomLen > 1e-3) {
+      const d = boom.clone().divideScalar(boomLen);
+      const hit = raycastArena(
+        { x: anchor.x, y: anchor.y, z: anchor.z },
+        { x: d.x, y: d.y, z: d.z },
+        boomLen + 40,
+      );
+      if (hit) free = THREE.MathUtils.clamp((hit.t - 40) / boomLen, 0.2, 1);
+    }
+    // zoom in at once, zoom back out smoothly
+    this.boomFree = free < this.boomFree ? free : this.boomFree + (free - this.boomFree) * (1 - Math.exp(-6 * dt));
+    const camPos = anchor.clone().add(boom.multiplyScalar(this.boomFree));
+    // last resort: never end up inside geometry
     for (let i = 0; i < 2; i++) {
-      const p = { x: camPos.x, y: camPos.y, z: camPos.z };
-      const d = arenaDistance(p);
-      if (d < 40) {
-        const n = arenaNormal(p);
-        camPos.add(new THREE.Vector3(n.x, n.y, n.z).multiplyScalar(40 - d));
-      }
+      const q = arenaQuery({ x: camPos.x, y: camPos.y, z: camPos.z });
+      if (q.dist < 25) camPos.add(new THREE.Vector3(q.normal.x, q.normal.y, q.normal.z).multiplyScalar(25 - q.dist));
     }
 
     // Look direction
@@ -195,6 +229,16 @@ export class CameraController {
       const n = (f: number, ph: number) => Math.sin(t * f + ph) * 0.6 + Math.sin(t * f * 2.3 + ph * 1.7) * 0.4;
       camPos.add(new THREE.Vector3(n(37, 0) * a, n(41, 2.1) * a, n(33, 4.2) * a));
     }
+
+    // The view never snaps: cap how fast it can turn (720°/s) so geometry or surface changes
+    // cannot flip it in a single frame
+    look.normalize();
+    if (this.lastLook.lengthSq() > 0.5) {
+      const ang = Math.acos(THREE.MathUtils.clamp(look.dot(this.lastLook), -1, 1));
+      const maxAng = (Math.PI * 4) * dt;
+      if (ang > maxAng) look.lerp(this.lastLook, 1 - maxAng / ang).normalize();
+    }
+    this.lastLook.copy(look);
 
     toThreeXYZ(camPos.x, camPos.y, camPos.z, this.camera.position);
     const lookAt = camPos.clone().add(look.multiplyScalar(1000));

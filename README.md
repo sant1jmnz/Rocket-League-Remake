@@ -52,12 +52,15 @@ sirve aparte, en **Ajustes → Servidor** se puede poner la URL `wss://…/ws`.
 | Saltar · doble salto · flip | Clic derecho | A (✕) |
 | Boost | Clic izquierdo | B (○) |
 | Powerslide / air roll | Shift izquierdo | X (□) |
-| Air roll izq. / der. | Q / E | — |
+| Air roll izq. / der. | Q / E | LB / RB |
 | Ball cam | Espacio | Y (△) |
 | Marcador | Tab | View / Share |
 | Pausa | Esc | Menu / Options |
 | Quick chat | 1 · 2 · 3 · 4 (dos veces) | Cruceta |
 | Reiniciar balón (entrenamiento) | R | R3 |
+
+**Stall:** mantené un air roll (p. ej. Q) y, con el segundo salto, apretá la dirección contraria (D, o la otra tecla de air roll): el flip se cancela y el auto queda flotando casi quieto.
+
 
 ## Autos y gráficos
 
