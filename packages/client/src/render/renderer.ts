@@ -285,7 +285,14 @@ export class GameRenderer {
     if (localView && !localView.car.demolished) {
       this.cam.update(
         dt,
-        { pos: localView.pos, quat: localView.quat, vel: localView.car.vel, onGround: localView.car.onGround },
+        {
+          pos: localView.pos,
+          quat: localView.quat,
+          vel: localView.car.vel,
+          onGround: localView.car.onGround,
+          boosting: localView.car.boostingTime > 0,
+          supersonic: localView.car.isSupersonic,
+        },
         ballVisible ? bp : null,
         swivel,
       );
@@ -409,6 +416,7 @@ export class GameRenderer {
           break;
         }
         case 'ballHit': {
+          if (e.carId === localCarId && e.strength > 1200) this.cam.shake(Math.min(30, e.strength / 80), 0.35);
           if (e.strength > 600) {
             this.burstFx.burst(toThree(e.pos), Math.min(80, e.strength / 30), 600, new THREE.Color('#fff4cc'), 0.35, 30);
           }

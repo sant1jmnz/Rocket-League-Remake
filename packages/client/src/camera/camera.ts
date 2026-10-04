@@ -14,17 +14,20 @@ export interface CameraSettings {
   swivelSpeed: number;
   transitionSpeed: number;
   shake: boolean;
+  invertSwivel: boolean;
 }
 
+/** The game's defaults (Settings → Camera). */
 export const DEFAULT_CAMERA: CameraSettings = {
-  fov: 110,
+  fov: 90,
   distance: 270,
-  height: 110,
+  height: 100,
   angle: -3,
   stiffness: 0.5,
-  swivelSpeed: 5,
-  transitionSpeed: 1,
+  swivelSpeed: 2.5,
+  transitionSpeed: 1.2,
   shake: true,
+  invertSwivel: false,
 };
 
 type V = THREE.Vector3;
@@ -34,6 +37,8 @@ export interface CameraTarget {
   quat: Quat;
   vel: Vec3;
   onGround: boolean;
+  boosting: boolean;
+  supersonic: boolean;
 }
 
 export class CameraController {
@@ -47,6 +52,7 @@ export class CameraController {
   private swivel = new THREE.Vector2();
   private shakeTime = 0;
   private shakeAmp = 0;
+  private shakeClock = 0;
 
   constructor(public camera: THREE.PerspectiveCamera) {}
 
@@ -132,7 +138,8 @@ export class CameraController {
 
     // Swivel (right stick)
     const swRate = s.swivelSpeed * 2;
-    this.swivel.x += (swivelInput.x - this.swivel.x) * Math.min(1, swRate * dt);
+    const swX = s.invertSwivel ? -swivelInput.x : swivelInput.x;
+    this.swivel.x += (swX - this.swivel.x) * Math.min(1, swRate * dt);
     this.swivel.y += (swivelInput.y - this.swivel.y) * Math.min(1, swRate * dt);
     const viewDir = this.dir.clone().applyAxisAngle(this.up, -this.swivel.x * Math.PI);
 
@@ -174,12 +181,19 @@ export class CameraController {
       look = carLook.clone().lerp(ballLook, this.blend).normalize();
     }
 
-    // Shake
+    // Shake: events (goals, demos, big hits) plus the light rumble of boosting / supersonic
+    this.shakeClock += dt;
+    let a = 0;
     if (this.shakeTime > 0) {
       this.shakeTime -= dt;
-      const a = this.shakeAmp * Math.max(0, this.shakeTime);
-      camPos.add(new THREE.Vector3((Math.random() - 0.5) * a, (Math.random() - 0.5) * a, (Math.random() - 0.5) * a));
+      a = this.shakeAmp * Math.max(0, this.shakeTime);
       if (this.shakeTime <= 0) this.shakeAmp = 0;
+    }
+    if (s.shake) a += (car.boosting ? 1.6 : 0) + (car.supersonic ? 1.6 : 0);
+    if (a > 0) {
+      const t = this.shakeClock;
+      const n = (f: number, ph: number) => Math.sin(t * f + ph) * 0.6 + Math.sin(t * f * 2.3 + ph * 1.7) * 0.4;
+      camPos.add(new THREE.Vector3(n(37, 0) * a, n(41, 2.1) * a, n(33, 4.2) * a));
     }
 
     toThreeXYZ(camPos.x, camPos.y, camPos.z, this.camera.position);

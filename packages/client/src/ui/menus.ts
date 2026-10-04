@@ -408,6 +408,7 @@ export class Menus {
        ${slider('swivelSpeed', 'Velocidad de giro', 1, 10, 0.5)}
        ${slider('transitionSpeed', 'Velocidad de transición', 1, 2, 0.1)}
        <div class="row"><label>Sacudida de cámara</label><input type="checkbox" class="shake" ${c.shake ? 'checked' : ''}/></div>
+       <div class="row"><label>Invertir giro de cámara</label><input type="checkbox" class="inv-swivel" ${c.invertSwivel ? 'checked' : ''}/></div>
        <button class="btn tiny cam-reset">Cámara por defecto</button>
        <div class="section">General</div>
        <div class="row"><label>Volumen</label><input type="range" class="vol" min="0" max="1" step="0.05" value="${this.settings.volume}"/></div>
@@ -429,6 +430,10 @@ export class Menus {
     });
     node.querySelector<HTMLInputElement>('.shake')!.addEventListener('change', (e) => {
       c.shake = (e.target as HTMLInputElement).checked;
+      this.cb.settingsChanged();
+    });
+    node.querySelector<HTMLInputElement>('.inv-swivel')!.addEventListener('change', (e) => {
+      c.invertSwivel = (e.target as HTMLInputElement).checked;
       this.cb.settingsChanged();
     });
     node.querySelector<HTMLInputElement>('.vol')!.addEventListener('input', (e) => {

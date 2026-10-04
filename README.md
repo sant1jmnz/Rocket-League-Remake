@@ -120,8 +120,11 @@ física de Rocket League que usan los bots de RLBot y que coincide con el juego 
 - **Después del gol**: 3 s de festejo y la repetición de los últimos segundos con la cámara sobre el
   goleador; se omite cuando todos aprietan saltar, online también. Al final, la pantalla de
   resultados con las estadísticas de cada jugador y el MVP (el mejor puntaje del equipo ganador).
-- **Cámara**: FOV 110, distancia 270, altura 110, ángulo −3, rigidez 0.5, giro 5, transición 1;
-  anclada al auto (la rigidez solo la aleja a alta velocidad) y estable durante flips.
+- **Cámara**: los valores por defecto y rangos del juego (Ajustes → Cámara): FOV 90 (60–110),
+  distancia 270 (100–400), altura 100 (40–200), ángulo −3 (−15–0), rigidez 0.5 (0–1), velocidad de
+  giro 2.5 (1–10), velocidad de transición 1.2 (1–2), sacudida activada e invertir giro. Anclada al
+  auto (la rigidez solo la aleja a alta velocidad), estable durante flips, y con la sacudida leve al
+  usar boost / ir supersónico y en golpes fuertes, goles y demoliciones.
 
 ## Multijugador
 
