@@ -1,11 +1,11 @@
 import { BALL, GRAVITY } from '../constants.js';
-import { arenaDistance, arenaNormal } from '../arena/sdf.js';
+import { arenaQuery } from '../arena/mesh.js';
 import type { BallState } from '../game/state.js';
 import { vaddScaled, vclampLen, vdot, vlen, v3, type Vec3 } from '../math/vec.js';
 import { ballBody, makeContact, solveContacts, type Contact } from './rigid.js';
 
 // Ball physics as in RocketSim: a Bullet sphere with linear damping, and the arena contact
-// resolved as one averaged "special" contact (restitution 0.6, friction 0.35).
+// resolved as one contact against the nearest arena triangle (restitution 0.6, friction 0.35).
 
 /** Gravity and drag (Bullet predictUnconstrainedMotion). */
 export function ballApplyForces(ball: BallState, dt: number): void {
@@ -24,10 +24,11 @@ export interface BallArenaContact {
 
 /** Contact between the ball and the arena (the ball rests at BALL.REST_Z, like the real game). */
 export function ballArenaContact(ball: BallState, dt: number): BallArenaContact | null {
-  const d = arenaDistance(ball.pos);
+  const q = arenaQuery(ball.pos);
+  const d = q.dist;
   const margin = 2 + vlen(ball.vel) * dt;
   if (d >= BALL.REST_Z + margin) return null;
-  const n = arenaNormal(ball.pos);
+  const n = q.normal;
   const point = vaddScaled(ball.pos, n, -BALL.RADIUS);
   const vn = vdot(ball.vel, n);
   const sep = d - BALL.REST_Z;
@@ -40,9 +41,9 @@ export function ballArenaContact(ball: BallState, dt: number): BallArenaContact 
 /** Position correction out of the arena (Bullet's split impulse). */
 export function ballPushOut(ball: BallState): void {
   for (let pass = 0; pass < 2; pass++) {
-    const d = arenaDistance(ball.pos);
-    if (d >= BALL.REST_Z - 0.01) return;
-    ball.pos = vaddScaled(ball.pos, arenaNormal(ball.pos), BALL.REST_Z - d);
+    const q = arenaQuery(ball.pos);
+    if (q.dist >= BALL.REST_Z - 0.01) return;
+    ball.pos = vaddScaled(ball.pos, q.normal, BALL.REST_Z - q.dist);
   }
 }
 

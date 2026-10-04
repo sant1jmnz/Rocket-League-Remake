@@ -87,8 +87,11 @@ Toda la física está en `packages/shared` (TypeScript puro, determinista, 120 t
 un **port de [RocketSim](https://github.com/ZealanL/RocketSim)** (MIT), la reimplementación de la
 física de Rocket League que usan los bots de RLBot y que coincide con el juego tick a tick:
 
-- **Estadio**: paredes en x = ±4096, fondos en y = ±5120, techo a 2044, esquinas a 45° y rampas curvas;
-  arco de 1786 × 642.775 × 880. Es una función de distancia analítica, la misma que dibuja el render.
+- **Estadio**: la malla de colisión real del estadio estándar (~8.000 triángulos: esquinas, rampas,
+  arcos con techo inclinado y fondo curvo), tomada de [rl_ball_sym](https://github.com/VirxEC/rl_ball_sym)
+  (MIT; la geometría la extrajo RLUtilities del juego). Paredes en x = ±4096, fondos en y = ±5120,
+  techo a 2048. El render dibuja esos mismos triángulos, así que lo que se ve es lo que choca.
+  Se regenera con `node tools/gen-arena-mesh.mjs <rl_ball_sym/assets/standard>`.
 - **Auto** (hitbox Octane 120.5 × 86.7 × 38.7, inercia de caja como el juego): vehículo de
   Bullet con **cuatro rayos de suspensión** (resorte 500, amortiguación 25/40, recorrido 12 uu, escalas
   35.75 / 54.27 delante/detrás), **fricción lateral por rueda** con la curva de deslizamiento real,

@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   ARENA,
+  ARENA_QUERY_PAD,
+  GOAL,
+  raycastArena,
   BALL,
   CAR,
   DT,
@@ -51,8 +54,13 @@ describe('arena', () => {
   });
 
   it('the goal is open and has the real size', () => {
-    // inside the goal mouth
-    expect(arenaDistance(v3(0, ARENA.HALF_LENGTH + 400, 300))).toBeGreaterThan(299);
+    // inside the goal mouth (queries are exact up to ARENA_QUERY_PAD)
+    expect(arenaDistance(v3(0, ARENA.HALF_LENGTH + 400, 300))).toBe(ARENA_QUERY_PAD);
+    // the goal is ~880 deep and ~1786 wide
+    const back = raycastArena(v3(0, ARENA.HALF_LENGTH, 50), v3(0, 1, 0), 2000);
+    expect(back!.t).toBeGreaterThan(700);
+    const post = raycastArena(v3(0, ARENA.HALF_LENGTH + 200, 300), v3(1, 0, 0), 2000);
+    expect(post!.t).toBeCloseTo(GOAL.HALF_WIDTH, -1);
     // the crossbar blocks above the goal height
     expect(arenaDistance(v3(0, ARENA.HALF_LENGTH + 100, 700))).toBeLessThan(0);
     // the post blocks beside it

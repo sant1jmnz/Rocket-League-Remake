@@ -1,17 +1,40 @@
 import * as THREE from 'three';
-import { ARENA, GOAL, SHRUNK_OCTAGON } from '@rl/shared';
+import { toCreasedNormals } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import { ARENA, GOAL, arenaTriangles, raycastArena } from '@rl/shared';
 import { buildStadium } from './stadium';
 
-// Builds the playable arena from the same analytic shape used by the physics (shared/arena/sdf.ts):
-// the shrunk octagon swept with a rounded profile, plus the goal boxes.
-// Look (DFH-stadium style): turf on the floor and up the curved ramps, a glowing team-colored LED
-// band where the ramp meets the wall, then nearly transparent glass walls up to the ceiling.
+// Builds the playable arena from the real collision mesh used by the physics (shared/arena/mesh.ts),
+// so what you see is exactly what the car and the ball collide with.
+// Look (DFH-stadium style): turf on the floor, metal ramps, a glowing team-colored LED band where
+// the ramp meets the wall, then nearly transparent glass walls up to the ceiling.
 
-const R = ARENA.CURVE_RADIUS;
+/** Height where the ramps turn vertical (the quarter-circle radius of the side ramps). */
+const R = 256;
 const H = ARENA.HEIGHT;
-const HL = ARENA.HALF_LENGTH - R;
 const GOAL_BACK = ARENA.HALF_LENGTH + GOAL.DEPTH;
 const LED_TOP = R + 120; // dark strip of screens above the ramps
+/** Profile distance of a point at height z (UV y): arc length up a quarter circle, then straight. */
+const RAMP_LEN = (R * Math.PI) / 2;
+const profileV = (z: number) => (z < R ? R * Math.acos(1 - Math.max(0, z) / R) : RAMP_LEN + z - R);
+
+/**
+ * Where the flat floor (or ceiling) ends, measured on the collision mesh with horizontal rays from
+ * the center at height z. Goal mouths are cut at the goal line.
+ */
+function meshOutline(z: number, rays = 256): [number, number][] {
+  const out: [number, number][] = [];
+  for (let i = 0; i < rays; i++) {
+    const a = (i / rays) * Math.PI * 2;
+    const d = { x: Math.cos(a), y: Math.sin(a), z: 0 };
+    const hit = raycastArena({ x: 0, y: 0, z }, d, 8000);
+    let t = hit ? hit.t : 8000;
+    if (Math.abs(d.y * t) > ARENA.HALF_LENGTH) t = ARENA.HALF_LENGTH / Math.abs(d.y);
+    out.push([d.x * t, d.y * t]);
+  }
+  return out;
+}
+/** Edge of the flat turf (where the ramps start). */
+const FLOOR_OUTLINE = meshOutline(2);
 
 export const BLUE = new THREE.Color('#1a63ff');
 export const ORANGE = new THREE.Color('#ff6a10');
@@ -118,7 +141,7 @@ function fieldTexture(): { map: THREE.CanvasTexture; glow: THREE.CanvasTexture }
   };
   const octagon = (ctx: CanvasRenderingContext2D, inset = 0) => {
     ctx.beginPath();
-    SHRUNK_OCTAGON.forEach(([x, y], i) => {
+    FLOOR_OUTLINE.forEach(([x, y], i) => {
       const k = 1 - inset / Math.hypot(x, y);
       if (i) ctx.lineTo(sx(x * k), sy(y * k));
       else ctx.moveTo(sx(x * k), sy(y * k));
@@ -442,19 +465,11 @@ function turfMaterial(markings: { map: THREE.Texture; glow: THREE.Texture }): TH
 /**
  * Curved ramps: grey metal gutter split into panels, with a darker groove along the middle and a
  * glowing team-colored line at the bottom (turf side) and the top (wall side).
- * UVs: x = distance along the perimeter, y = distance along the ramp profile (0 → ~402).
+ * UVs: x = distance along the perimeter, y = distance along the ramp profile (0 → RAMP_LEN).
  */
-/** Length of the ramp's quarter-circle profile as tessellated by profile() (UV y at the ramp top). */
-function rampProfileLength(): number {
-  const prof = profile();
-  let len = 0;
-  for (let j = 1; j < prof.length && prof[j - 1][2] === 'ramp'; j++) len += Math.hypot(prof[j][0] - prof[j - 1][0], prof[j][1] - prof[j - 1][1]);
-  return len;
-}
-
 function rampMaterial(): THREE.MeshStandardMaterial {
   const mat = new THREE.MeshStandardMaterial({ vertexColors: true, color: '#ffffff', metalness: 0.75, roughness: 0.42 });
-  const rampLen = rampProfileLength();
+  const rampLen = RAMP_LEN;
   mat.onBeforeCompile = (shader) => {
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', '#include <common>\nvarying vec2 vRamp;')
@@ -492,7 +507,7 @@ function rampMaterial(): THREE.MeshStandardMaterial {
  */
 function screenStripMaterial(): THREE.MeshStandardMaterial {
   const mat = new THREE.MeshStandardMaterial({ vertexColors: true, color: '#ffffff', metalness: 0.6, roughness: 0.4 });
-  const y0 = rampProfileLength();
+  const y0 = RAMP_LEN;
   const h = LED_TOP - R;
   mat.onBeforeCompile = (shader) => {
     shader.vertexShader = shader.vertexShader
@@ -522,19 +537,27 @@ function screenStripMaterial(): THREE.MeshStandardMaterial {
   return mat;
 }
 
+const fuv = (x: number, y: number) => [(x + 4096) / 8192, (y + 6000) / 12000];
+
+/**
+ * Flat turf: the floor outline pushed a little outwards so it tucks under the ramps (which win the
+ * depth test thanks to the floor's polygon offset), plus the goal floors up to the back of the goals.
+ */
 function floorGeometry(): THREE.BufferGeometry {
   const m = new Mesher();
-  const poly = SHRUNK_OCTAGON;
-  const fuv = (x: number, y: number) => [(x + 4096) / 8192, (y + 6000) / 12000];
+  const poly = FLOOR_OUTLINE.map(([x, y]) => {
+    const l = Math.hypot(x, y);
+    return [x * (1 + 40 / l), y * (1 + 40 / l)];
+  });
   for (let i = 0; i < poly.length; i++) {
     const a = poly[i];
     const b = poly[(i + 1) % poly.length];
     m.tri([0, 0, 0], [a[0], a[1], 0], [b[0], b[1], 0], [fuv(0, 0), fuv(a[0], a[1]), fuv(b[0], b[1])]);
   }
   for (const side of [1, -1]) {
-    const y0 = side * HL;
+    const y0 = side * (ARENA.HALF_LENGTH - 300);
     const y1 = side * GOAL_BACK;
-    const x = GOAL.HALF_WIDTH;
+    const x = GOAL.HALF_WIDTH + 40;
     const pts = [
       [-x, y0, 0],
       [x, y0, 0],
@@ -549,127 +572,147 @@ function floorGeometry(): THREE.BufferGeometry {
 }
 
 // ---------------------------------------------------------------------------
-// Walls (perimeter sweep)
+// Walls, ramps and goals from the collision mesh
 // ---------------------------------------------------------------------------
 
-interface PerimeterSample {
-  bx: number;
-  by: number;
-  nx: number;
-  ny: number;
-  backWall: boolean;
-  dist: number;
-}
+/** Full-size octagon (the outer walls) used to give every wall point a perimeter coordinate. */
+const PERIMETER: [number, number][] = (() => {
+  const c = 8064; // corner planes: |x| + |y| = 8064
+  const hw = ARENA.HALF_WIDTH;
+  const hl = ARENA.HALF_LENGTH;
+  return [
+    [hw, -(c - hw)],
+    [hw, c - hw],
+    [c - hl, hl],
+    [-(c - hl), hl],
+    [-hw, c - hw],
+    [-hw, -(c - hw)],
+    [-(c - hl), -hl],
+    [c - hl, -hl],
+  ];
+})();
+const PERIMETER_LEN = PERIMETER.reduce((acc, p, i) => {
+  const q = PERIMETER[(i + 1) % PERIMETER.length];
+  return acc + Math.hypot(q[0] - p[0], q[1] - p[1]);
+}, 0);
 
-function perimeter(): PerimeterSample[] {
-  const out: PerimeterSample[] = [];
-  const poly = SHRUNK_OCTAGON;
-  for (let i = 0; i < poly.length; i++) {
-    const a = poly[i];
-    const b = poly[(i + 1) % poly.length];
-    const c = poly[(i + 2) % poly.length];
+/** Distance along the outer wall of the point of the perimeter closest to (x, y). */
+function perimeterU(x: number, y: number): number {
+  let best = Infinity;
+  let u = 0;
+  let acc = 0;
+  for (let i = 0; i < PERIMETER.length; i++) {
+    const a = PERIMETER[i];
+    const b = PERIMETER[(i + 1) % PERIMETER.length];
     const dx = b[0] - a[0];
     const dy = b[1] - a[1];
     const len = Math.hypot(dx, dy);
-    const nx = dy / len;
-    const ny = -dx / len;
-    const backWall = Math.abs(ny) > 0.99;
-    const ts = new Set<number>();
-    const steps = Math.max(2, Math.ceil(len / 300));
-    for (let s = 0; s < steps; s++) ts.add(s / steps);
-    if (backWall) {
-      for (const px of [-GOAL.HALF_WIDTH, GOAL.HALF_WIDTH]) {
-        const t = (px - a[0]) / dx;
-        if (t > 0 && t < 1) ts.add(t);
-      }
+    const t = Math.max(0, Math.min(1, ((x - a[0]) * dx + (y - a[1]) * dy) / (len * len)));
+    const d = Math.hypot(a[0] + dx * t - x, a[1] + dy * t - y);
+    if (d < best) {
+      best = d;
+      u = acc + t * len;
     }
-    for (const t of [...ts].sort((p, q) => p - q)) out.push({ bx: a[0] + dx * t, by: a[1] + dy * t, nx, ny, backWall, dist: 0 });
-    const dx2 = c[0] - b[0];
-    const dy2 = c[1] - b[1];
-    const len2 = Math.hypot(dx2, dy2);
-    const a0 = Math.atan2(ny, nx);
-    let a1 = Math.atan2(-dx2 / len2, dy2 / len2);
-    if (a1 < a0) a1 += Math.PI * 2;
-    for (let s = 0; s < 8; s++) {
-      const ang = a0 + ((a1 - a0) * s) / 8;
-      out.push({ bx: b[0], by: b[1], nx: Math.cos(ang), ny: Math.sin(ang), backWall: false, dist: 0 });
+    acc += len;
+  }
+  return u;
+}
+
+type Vec = [number, number, number];
+
+/** Splits a polygon by the plane z = h into the parts below and above it. */
+function splitZ(poly: Vec[], h: number): [Vec[], Vec[]] {
+  const lo: Vec[] = [];
+  const hi: Vec[] = [];
+  for (let i = 0; i < poly.length; i++) {
+    const p = poly[i];
+    const q = poly[(i + 1) % poly.length];
+    (p[2] <= h ? lo : hi).push(p);
+    if ((p[2] < h && q[2] > h) || (p[2] > h && q[2] < h)) {
+      const t = (h - p[2]) / (q[2] - p[2]);
+      const m: Vec = [p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t, h];
+      lo.push(m);
+      hi.push(m);
     }
   }
-  // Arc length along the outer wall (for UVs)
-  let d = 0;
-  for (let i = 0; i < out.length; i++) {
-    out[i].dist = d;
-    const p = out[i];
-    const q = out[(i + 1) % out.length];
-    d += Math.hypot(q.bx + q.nx * R - p.bx - p.nx * R, q.by + q.ny * R - p.by - p.ny * R);
+  return [lo, hi];
+}
+
+type Zone = 'ramp' | 'led' | 'wall' | 'ceiling' | 'net' | 'goalFloor';
+
+function wallMeshes(): Record<Zone, THREE.BufferGeometry> {
+  const meshers: Record<Zone, Mesher> = {
+    ramp: new Mesher(),
+    led: new Mesher(),
+    wall: new Mesher(),
+    ceiling: new Mesher(),
+    net: new Mesher(),
+    goalFloor: new Mesher(),
+  };
+  const emit = (zone: Zone, poly: Vec[]) => {
+    if (poly.length < 3) return;
+    const uvs = poly.map((p) =>
+      zone === 'goalFloor' || zone === 'net' ? fuv(p[0], p[1]) : [perimeterU(p[0], p[1]), profileV(p[2])],
+    );
+    // keep the perimeter coordinate continuous across the wrap-around seam
+    if (zone !== 'goalFloor' && zone !== 'net') {
+      const max = Math.max(...uvs.map((u) => u[0]));
+      for (const u of uvs) if (max - u[0] > PERIMETER_LEN / 2) u[0] += PERIMETER_LEN;
+    }
+    for (let i = 1; i < poly.length - 1; i++) meshers[zone].tri(poly[0], poly[i], poly[i + 1], [uvs[0], uvs[i], uvs[i + 1]]);
+  };
+
+  const T = arenaTriangles();
+  for (let i = 0; i < T.length; i += 9) {
+    const a: Vec = [T[i], T[i + 1], T[i + 2]];
+    const b: Vec = [T[i + 3], T[i + 4], T[i + 5]];
+    const c: Vec = [T[i + 6], T[i + 7], T[i + 8]];
+    const e1 = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+    const e2 = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+    const nz = (e1[0] * e2[1] - e1[1] * e2[0]) / Math.hypot(
+      e1[1] * e2[2] - e1[2] * e2[1],
+      e1[2] * e2[0] - e1[0] * e2[2],
+      e1[0] * e2[1] - e1[1] * e2[0],
+    );
+    const cy = Math.abs(a[1] + b[1] + c[1]) / 3;
+    const maxZ = Math.max(a[2], b[2], c[2]);
+    const minZ = Math.min(a[2], b[2], c[2]);
+    // the flat floor and ceiling are drawn separately
+    if (nz > 0.999 && maxZ < 1) continue;
+    if (nz < -0.999 && minZ > H - 1) continue;
+    // inside the goals
+    if (cy > ARENA.HALF_LENGTH + 2) {
+      emit(nz > 0.5 ? 'goalFloor' : 'net', [a, b, c]);
+      continue;
+    }
+    // ramps below R, the screen strip up to LED_TOP, glass above (the curves into the ceiling
+    // are part of the ceiling glass)
+    const [low, rest] = splitZ([a, b, c], R);
+    const [mid, high] = splitZ(rest, LED_TOP);
+    emit('ramp', low);
+    emit(Math.abs(nz) < 0.3 ? 'led' : 'ramp', mid);
+    emit(nz < -0.05 ? 'ceiling' : 'wall', high);
+  }
+
+  // Flat ceiling, out to where the curves start
+  const top = meshOutline(H - 2, 64);
+  for (let i = 0; i < top.length; i++) {
+    const p = top[i];
+    const q = top[(i + 1) % top.length];
+    meshers.ceiling.tri([0, 0, H], [q[0], q[1], H], [p[0], p[1], H], [
+      [0, 0],
+      [perimeterU(q[0], q[1]), profileV(H)],
+      [perimeterU(p[0], p[1]), profileV(H)],
+    ]);
+  }
+
+  const out = {} as Record<Zone, THREE.BufferGeometry>;
+  for (const zone of Object.keys(meshers) as Zone[]) {
+    // smooth the faceted curves, but keep the hard edges (posts, crossbar, corners of the goals)
+    out[zone] = toCreasedNormals(meshers[zone].geometry(), Math.PI / 4);
   }
   return out;
 }
-
-type Zone = 'ramp' | 'led' | 'wall' | 'ceiling';
-
-/** Profile: [outward offset, z, zone of the segment starting here]. */
-function profile(): [number, number, Zone][] {
-  const pts: [number, number, Zone][] = [];
-  const steps = 12;
-  for (let i = 0; i <= steps; i++) {
-    const t = (i / steps) * (Math.PI / 2);
-    pts.push([R * Math.sin(t), R - R * Math.cos(t), i < steps ? 'ramp' : 'led']);
-  }
-  pts.push([R, LED_TOP, 'wall']);
-  pts.push([R, GOAL.HEIGHT, 'wall']);
-  pts.push([R, (GOAL.HEIGHT + H - R) / 2, 'wall']);
-  pts.push([R, H - R, 'ceiling']);
-  for (let i = 1; i <= steps; i++) {
-    const t = (i / steps) * (Math.PI / 2);
-    pts.push([R * Math.cos(t), H - R + R * Math.sin(t), 'ceiling']);
-  }
-  return pts;
-}
-
-function wallMeshes(): Record<Zone, THREE.BufferGeometry> {
-  const per = perimeter();
-  const prof = profile();
-  const meshers: Record<Zone, Mesher> = { ramp: new Mesher(), led: new Mesher(), wall: new Mesher(), ceiling: new Mesher() };
-  const pt = (p: PerimeterSample, q: [number, number, Zone]) => [p.bx + p.nx * q[0], p.by + p.ny * q[0], q[1]];
-  // Arc length along the profile (for UVs)
-  const profLen: number[] = [0];
-  for (let j = 1; j < prof.length; j++) profLen.push(profLen[j - 1] + Math.hypot(prof[j][0] - prof[j - 1][0], prof[j][1] - prof[j - 1][1]));
-  const total = per[per.length - 1].dist;
-  for (let i = 0; i < per.length; i++) {
-    const p0 = per[i];
-    const p1 = per[(i + 1) % per.length];
-    const u0 = p0.dist;
-    const u1 = i + 1 < per.length ? p1.dist : total;
-    const inMouth = p0.backWall && p1.backWall && Math.abs(p0.bx) <= GOAL.HALF_WIDTH + 0.01 && Math.abs(p1.bx) <= GOAL.HALF_WIDTH + 0.01;
-    for (let j = 0; j < prof.length - 1; j++) {
-      const q0 = prof[j];
-      const q1 = prof[j + 1];
-      if (inMouth && q1[1] <= GOAL.HEIGHT + 0.01) continue;
-      const zone = q0[2];
-      meshers[zone].quad(pt(p0, q0), pt(p0, q1), pt(p1, q1), pt(p1, q0), [
-        [u0, profLen[j]],
-        [u0, profLen[j + 1]],
-        [u1, profLen[j + 1]],
-        [u1, profLen[j]],
-      ]);
-    }
-  }
-  // Flat ceiling
-  const poly = SHRUNK_OCTAGON;
-  for (let i = 0; i < poly.length; i++) {
-    const a = poly[i];
-    const b = poly[(i + 1) % poly.length];
-    meshers.ceiling.tri([0, 0, H], [b[0], b[1], H], [a[0], a[1], H]);
-  }
-  return {
-    ramp: meshers.ramp.geometry(),
-    led: meshers.led.geometry(),
-    wall: meshers.wall.geometry(),
-    ceiling: meshers.ceiling.geometry(),
-  };
-}
-
 const glassVertex = /* glsl */ `
   attribute vec3 color;
   varying vec3 vWorld;
@@ -723,10 +766,11 @@ const glassFragment = /* glsl */ `
 `;
 
 const netFragment = /* glsl */ `
-  uniform vec3 uColor;
   varying vec3 vWorld;
   varying vec3 vNormal;
+  varying vec3 vColor;
   void main() {
+    vec3 uColor = vColor;
     vec3 n = abs(vNormal);
     vec2 uv = n.x > 0.5 ? vWorld.zy : (n.y > 0.5 ? vWorld.xz : vWorld.xy);
     // fine square grid on tinted glass
@@ -739,9 +783,12 @@ const netFragment = /* glsl */ `
 `;
 
 const netVertex = /* glsl */ `
+  attribute vec3 color;
   varying vec3 vWorld;
   varying vec3 vNormal;
+  varying vec3 vColor;
   void main() {
+    vColor = color;
     vec4 w = modelMatrix * vec4(position, 1.0);
     vWorld = w.xyz;
     vNormal = normalize(mat3(modelMatrix) * normal);
@@ -750,43 +797,19 @@ const netVertex = /* glsl */ `
 `;
 
 // ---------------------------------------------------------------------------
-// Goals
+// Goal frames
 // ---------------------------------------------------------------------------
 
-function goalNetGeometry(side: 1 | -1): THREE.BufferGeometry {
-  const m = new Mesher();
-  const x = GOAL.HALF_WIDTH;
-  const gh = GOAL.HEIGHT;
-  const y0 = ARENA.HALF_LENGTH;
-  const y1 = GOAL_BACK;
-  const s = side;
-  m.quad([-x, s * y1, 0], [x, s * y1, 0], [x, s * y1, gh], [-x, s * y1, gh]);
-  m.quad([-x, s * y0, gh], [x, s * y0, gh], [x, s * y1, gh], [-x, s * y1, gh]);
-  for (const sx of [-1, 1]) m.quad([sx * x, s * y0, 0], [sx * x, s * y1, 0], [sx * x, s * y1, gh], [sx * x, s * y0, gh]);
-  return m.geometry();
-}
-
-/** Solid side pieces under the floor ramp next to the posts (the ramp gets cut by the goal mouth). */
-function goalCheekGeometry(side: 1 | -1): THREE.BufferGeometry {
-  const m = new Mesher();
-  const x = GOAL.HALF_WIDTH;
-  for (const sx of [-1, 1]) {
-    const poly: number[][] = [[sx * x, side * HL, 0]];
-    for (let i = 1; i <= 10; i++) {
-      const t = (i / 10) * (Math.PI / 2);
-      poly.push([sx * x, side * (HL + R * Math.sin(t)), R - R * Math.cos(t)]);
-    }
-    poly.push([sx * x, side * ARENA.HALF_LENGTH, 0]);
-    for (let i = 1; i < poly.length - 2; i++) m.tri(poly[poly.length - 1], poly[i], poly[i + 1]);
-    m.tri(poly[poly.length - 1], poly[0], poly[1]);
-  }
-  return m.geometry();
-}
-
 /** U-shaped rounded frame around a goal opening (three coords), offset by `grow` uu outwards. */
-function goalArch(z: number, grow: number, corner: number): THREE.CurvePath<THREE.Vector3> {
-  const w = GOAL.HALF_WIDTH + grow;
-  const h = GOAL.HEIGHT + grow;
+function goalArch(
+  z: number,
+  grow: number,
+  corner: number,
+  halfWidth: number = GOAL.HALF_WIDTH,
+  height: number = GOAL.HEIGHT,
+): THREE.CurvePath<THREE.Vector3> {
+  const w = halfWidth + grow;
+  const h = height + grow;
   const c = corner;
   const path = new THREE.CurvePath<THREE.Vector3>();
   const V = (x: number, y: number) => new THREE.Vector3(x, y, z);
@@ -806,10 +829,20 @@ function goalArch(z: number, grow: number, corner: number): THREE.CurvePath<THRE
   return path;
 }
 
+/** Roof height of the goal at (x, y) and its half width at y, measured on the collision mesh. */
+function goalRoof(x: number, y: number): number {
+  const hit = raycastArena({ x, y, z: 200 }, { x: 0, y: 0, z: 1 }, 1000);
+  return hit ? hit.point.z : GOAL.HEIGHT;
+}
+function goalHalfWidth(y: number): number {
+  const hit = raycastArena({ x: 0, y, z: 200 }, { x: 1, y: 0, z: 0 }, 2000);
+  return hit ? hit.t : GOAL.HALF_WIDTH;
+}
+
 /**
  * Goal frames as in the current DFH Stadium: a rounded dark metal frame around the mouth with a
  * glowing team-colored tube on its face, a smaller frame at the back and glowing rails joining
- * them along the top corners.
+ * them along the top corners (following the sloped roof of the real goal).
  */
 function goalFrame(side: 1 | -1, color: THREE.Color): THREE.Group {
   const grp = new THREE.Group();
@@ -824,23 +857,24 @@ function goalFrame(side: 1 | -1, color: THREE.Color): THREE.Group {
   grp.add(frontGlow);
   const inner = new THREE.Mesh(new THREE.TubeGeometry(goalArch(zMouth - side * 30, 6, 140), 120, 8, 8), glow);
   grp.add(inner);
-  const back = new THREE.Mesh(new THREE.TubeGeometry(goalArch(zBack, 20, 150), 120, 30, 10), metal);
+  const yBack = side * (GOAL_BACK - 30);
+  const backW = goalHalfWidth(yBack);
+  const backH = goalRoof(0, yBack);
+  const back = new THREE.Mesh(new THREE.TubeGeometry(goalArch(zBack, 20, 150, backW, backH), 120, 30, 10), metal);
   grp.add(back);
-  const backGlow = new THREE.Mesh(new THREE.TubeGeometry(goalArch(zBack + side * 30, 20, 150), 120, 10, 8), glow);
+  const backGlow = new THREE.Mesh(
+    new THREE.TubeGeometry(goalArch(zBack + side * 30, 20, 150, backW, backH), 120, 10, 8),
+    glow,
+  );
   grp.add(backGlow);
   for (const sx of [-1, 1]) {
-    const rail = new THREE.Mesh(
-      new THREE.TubeGeometry(
-        new THREE.LineCurve3(
-          new THREE.Vector3(sx * (GOAL.HALF_WIDTH - 60), GOAL.HEIGHT + 4, zMouth),
-          new THREE.Vector3(sx * (GOAL.HALF_WIDTH - 60), GOAL.HEIGHT + 4, zBack),
-        ),
-        8,
-        9,
-        8,
-      ),
-      glow,
-    );
+    const pts: THREE.Vector3[] = [];
+    for (let i = 0; i <= 8; i++) {
+      const y = side * (ARENA.HALF_LENGTH + ((GOAL_BACK - 30 - ARENA.HALF_LENGTH) * i) / 8);
+      const x = sx * (Math.min(GOAL.HALF_WIDTH, goalHalfWidth(y)) - 60);
+      pts.push(new THREE.Vector3(x, goalRoof(x, y) + 4, -y));
+    }
+    const rail = new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 24, 9, 8), glow);
     grp.add(rail);
   }
   return grp;
@@ -903,11 +937,21 @@ export interface ArenaMeshes {
 export function buildArena(): ArenaMeshes {
   const group = new THREE.Group();
 
-  const floor = new THREE.Mesh(floorGeometry(), turfMaterial(fieldTexture()));
+  const turf = turfMaterial(fieldTexture());
+  const floorMat = turf.clone();
+  floorMat.onBeforeCompile = turf.onBeforeCompile;
+  // the flat floor tucks under the ramps: let them win the depth test
+  floorMat.polygonOffset = true;
+  floorMat.polygonOffsetFactor = 1;
+  floorMat.polygonOffsetUnits = 4;
+  const floor = new THREE.Mesh(floorGeometry(), floorMat);
   floor.receiveShadow = true;
   group.add(floor);
 
   const walls = wallMeshes();
+  const goalFloor = new THREE.Mesh(walls.goalFloor, turf);
+  goalFloor.receiveShadow = true;
+  group.add(goalFloor);
   const ramp = new THREE.Mesh(walls.ramp, rampMaterial());
   ramp.receiveShadow = true;
   group.add(ramp);
@@ -932,23 +976,21 @@ export function buildArena(): ArenaMeshes {
   ceilMesh.renderOrder = 2;
   group.add(ceilMesh);
 
-  const cheekMat = new THREE.MeshStandardMaterial({ color: '#2b3038', metalness: 0.5, roughness: 0.5, side: THREE.DoubleSide });
+  // Goal interiors (team-tinted through the vertex colors)
+  const net = new THREE.Mesh(
+    walls.net,
+    new THREE.ShaderMaterial({
+      vertexShader: netVertex,
+      fragmentShader: netFragment,
+      transparent: true,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    }),
+  );
+  net.renderOrder = 3;
+  group.add(net);
   for (const side of [1, -1] as const) {
     const color = side > 0 ? ORANGE : BLUE;
-    const net = new THREE.Mesh(
-      goalNetGeometry(side),
-      new THREE.ShaderMaterial({
-        vertexShader: netVertex,
-        fragmentShader: netFragment,
-        uniforms: { uColor: { value: color } },
-        transparent: true,
-        depthWrite: false,
-        side: THREE.DoubleSide,
-      }),
-    );
-    net.renderOrder = 3;
-    group.add(net);
-    group.add(new THREE.Mesh(goalCheekGeometry(side), cheekMat));
     group.add(goalFrame(side, color));
     const light = new THREE.PointLight(color, 4, 2600, 1.4);
     light.position.set(0, 350, -side * (ARENA.HALF_LENGTH + 450));

@@ -1,5 +1,5 @@
 import { BALL, CAR, GRAVITY } from '../constants.js';
-import { arenaDistance, arenaNormal } from '../arena/sdf.js';
+import { arenaQuery, raycastArena } from '../arena/mesh.js';
 import type { BallState, CarState, ControllerInput } from '../game/state.js';
 import {
   clamp,
@@ -102,22 +102,6 @@ interface RayHit {
 export interface RayScene {
   ball: BallState | null;
   cars: CarState[];
-}
-
-/** Sphere-traces the arena distance field. */
-export function raycastArena(o: Vec3, d: Vec3, maxT: number): { t: number; point: Vec3; normal: Vec3 } | null {
-  let t = 0;
-  for (let i = 0; i < 32; i++) {
-    const p = vaddScaled(o, d, t);
-    const dist = arenaDistance(p);
-    if (dist < 0.02) {
-      if (i === 0 && dist < -1) return null; // ray starts inside a wall
-      return { t, point: p, normal: arenaNormal(p) };
-    }
-    t += dist;
-    if (t > maxT) return null;
-  }
-  return null;
 }
 
 function raySphere(o: Vec3, d: Vec3, c: Vec3, r: number, maxT: number): number | null {
@@ -664,11 +648,11 @@ export interface ArenaContactPoint {
  */
 export function carArenaContacts(car: CarState, margin = 0): ArenaContactPoint[] {
   const out: ArenaContactPoint[] = [];
-  if (arenaDistance(hitboxCenter(car)) >= HITBOX_BOUND + margin) return out;
+  if (arenaQuery(hitboxCenter(car)).dist >= HITBOX_BOUND + margin) return out;
   for (const lp of HITBOX_POINTS) {
     const wp = vadd(car.pos, qrotate(car.quat, lp));
-    const d = arenaDistance(wp);
-    if (d < margin) out.push({ point: wp, normal: arenaNormal(wp), depth: -d });
+    const q = arenaQuery(wp);
+    if (q.dist < margin) out.push({ point: wp, normal: q.normal, depth: -q.dist });
   }
   out.sort((a, b) => b.depth - a.depth);
   return out.slice(0, 4);

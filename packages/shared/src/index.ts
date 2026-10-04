@@ -1,6 +1,6 @@
 export * from './constants.js';
 export * from './math/vec.js';
-export * from './arena/sdf.js';
+export * from './arena/mesh.js';
 export * from './arena/boostpads.js';
 export * from './game/state.js';
 export * from './game/kickoff.js';

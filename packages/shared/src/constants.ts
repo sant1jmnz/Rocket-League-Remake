@@ -15,11 +15,9 @@ export const ARENA = {
   HALF_WIDTH: 4096,
   /** Back walls at y = ±HALF_LENGTH */
   HALF_LENGTH: 5120,
-  HEIGHT: 2044,
+  HEIGHT: 2048,
   /** Corners are cut at 45°: |x| + |y| <= CORNER_PLANE */
   CORNER_PLANE: 4096 + 5120 - 1152,
-  /** Radius of the curved transitions between floor/walls/ceiling */
-  CURVE_RADIUS: 256,
 } as const;
 
 export const GOAL = {
