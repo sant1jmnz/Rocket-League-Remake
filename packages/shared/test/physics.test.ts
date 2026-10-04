@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   ARENA,
+  ARENA_QUERY_PAD,
+  GOAL,
+  raycastArena,
   BALL,
   CAR,
   DT,
@@ -11,6 +14,10 @@ import {
   createGameState,
   emptyInput,
   qforward,
+  qfromAxisAngle,
+  qfromYaw,
+  qinvRotate,
+  qmul,
   qup,
   stepBall,
   stepGame,
@@ -47,8 +54,13 @@ describe('arena', () => {
   });
 
   it('the goal is open and has the real size', () => {
-    // inside the goal mouth
-    expect(arenaDistance(v3(0, ARENA.HALF_LENGTH + 400, 300))).toBeGreaterThan(299);
+    // inside the goal mouth (queries are exact up to ARENA_QUERY_PAD)
+    expect(arenaDistance(v3(0, ARENA.HALF_LENGTH + 400, 300))).toBe(ARENA_QUERY_PAD);
+    // the goal is ~880 deep and ~1786 wide
+    const back = raycastArena(v3(0, ARENA.HALF_LENGTH, 50), v3(0, 1, 0), 2000);
+    expect(back!.t).toBeGreaterThan(700);
+    const post = raycastArena(v3(0, ARENA.HALF_LENGTH + 200, 300), v3(1, 0, 0), 2000);
+    expect(post!.t).toBeCloseTo(GOAL.HALF_WIDTH, -1);
     // the crossbar blocks above the goal height
     expect(arenaDistance(v3(0, ARENA.HALF_LENGTH + 100, 700))).toBeLessThan(0);
     // the post blocks beside it
@@ -90,7 +102,16 @@ describe('car driving', () => {
     run(s, 1, { throttle: 1, steer: 1 });
     const speed = vlen(car.vel);
     const radius = speed / Math.abs(car.angVel.z);
-    const expected = 1 / curve(CAR.STEER_CURVE, speed);
+    // Turn curvature measured in the real game (RLBot wiki)
+    const STEER_CURVE: [number, number][] = [
+      [0, 0.0069],
+      [500, 0.00398],
+      [1000, 0.00235],
+      [1500, 0.001375],
+      [1750, 0.0011],
+      [2500, 0.00088],
+    ];
+    const expected = 1 / curve(STEER_CURVE, speed);
     expect(radius / expected).toBeGreaterThan(0.9);
     expect(radius / expected).toBeLessThan(1.1);
   });
@@ -224,13 +245,102 @@ describe('flip reset', () => {
     car.onGround = false;
     car.hasJumped = true;
     car.hasDoubleJumped = true;
+    car.jumpTime = 2;
     car.airTimeSinceJump = 3;
-    // just under the hitbox bottom (origin + 20.75 offset - 18.08 half height)
-    s.ball.pos = v3(CAR.HITBOX_OFFSET.x, 0, 600 + 2.67 - BALL.RADIUS + 5);
+    // under the car, within reach of the suspension rays (but not touching the hitbox)
+    s.ball.pos = v3(8, 0, 590 - BALL.RADIUS);
     s.ball.vel = v3();
     stepGame(s, () => emptyInput());
     expect(car.hasDoubleJumped).toBe(false);
     expect(car.hasJumped).toBe(false);
+  });
+});
+
+describe('RocketSim mechanics', () => {
+  it('the car rests on its suspension at the real height', () => {
+    const s = freeplayWithCar();
+    run(s, 1, {});
+    const car = s.cars[0];
+    expect(car.wheelContacts).toBe(4);
+    expect(car.pos.z).toBeGreaterThan(16.5);
+    expect(car.pos.z).toBeLessThan(18);
+  });
+
+  it('a flip stops the fall while it rotates (z damping)', () => {
+    const s = freeplayWithCar();
+    const car = s.cars[0];
+    car.pos = v3(0, 0, 800);
+    car.onGround = false;
+    car.vel = v3(0, 0, -400);
+    stepGame(s, () => ({ ...emptyInput(), jump: true, pitch: -1 }));
+    expect(car.isFlipping).toBe(true);
+    run(s, 0.25, { pitch: -1 });
+    expect(Math.abs(car.vel.z)).toBeLessThan(30);
+  });
+
+  it('pulling back during a front flip cancels the rotation', () => {
+    const flipAngle = (cancel: boolean) => {
+      const s = freeplayWithCar();
+      const car = s.cars[0];
+      car.pos = v3(0, 0, 800);
+      car.onGround = false;
+      stepGame(s, () => ({ ...emptyInput(), jump: true, pitch: -1 }));
+      run(s, 0.4, { pitch: cancel ? 1 : 0 });
+      return Math.abs(qinvRotate(car.quat, car.angVel).y);
+    };
+    expect(flipAngle(true)).toBeLessThan(flipAngle(false) * 0.5);
+  });
+
+  it('jumping while upside down on the floor auto-flips the car', () => {
+    const s = freeplayWithCar();
+    const car = s.cars[0];
+    car.quat = qmul(qfromYaw(Math.PI / 2), qfromAxisAngle(v3(1, 0, 0), Math.PI));
+    car.pos.z = 45;
+    run(s, 1, {});
+    expect(qup(car.quat).z).toBeLessThan(-0.9);
+    run(s, 1.5, (t) => ({ jump: t < 0.1 }));
+    expect(qup(car.quat).z).toBeGreaterThan(0.95);
+    expect(car.onGround).toBe(true);
+  });
+
+  it('without throttle the car slides down the wall; with throttle it sticks', () => {
+    const slide = (throttle: number) => {
+      const s = freeplayWithCar();
+      const car = s.cars[0];
+      // on the side wall at x = +4096, nose pointing along +y
+      car.pos = v3(ARENA.HALF_WIDTH - CAR.REST_HEIGHT, 0, 1000);
+      car.quat = qmul(qfromYaw(Math.PI / 2), qfromAxisAngle(v3(1, 0, 0), -Math.PI / 2));
+      car.vel = v3(0, 300, 0);
+      run(s, 1, { throttle });
+      return car.pos.z;
+    };
+    expect(slide(0)).toBeLessThan(900);
+    expect(slide(0.05)).toBeGreaterThan(slide(0) + 100);
+  });
+
+  it('powerslide turns much tighter than a normal turn', () => {
+    const yawAfter = (handbrake: boolean) => {
+      const s = freeplayWithCar();
+      const car = s.cars[0];
+      run(s, 1.5, { throttle: 1 });
+      run(s, 0.6, { throttle: 1, steer: 1, handbrake });
+      return Math.atan2(qforward(car.quat).y, qforward(car.quat).x);
+    };
+    // the car starts facing +y (yaw 90°) and turns right (towards 0)
+    expect(yawAfter(true)).toBeLessThan(yawAfter(false));
+  });
+
+  it('a 1400 uu/s hit sends the ball faster than the car (Psyonix impulse)', () => {
+    const s = freeplayWithCar();
+    const car = s.cars[0];
+    car.pos = v3(0, -3000, CAR.REST_HEIGHT);
+    s.ball.pos = v3(3000, 3000, BALL.REST_Z);
+    run(s, 2.5, { throttle: 1 });
+    s.ball.pos = v3(car.pos.x + 13, car.pos.y + 350, BALL.REST_Z);
+    s.ball.vel = v3();
+    const carSpeed = vlen(car.vel);
+    run(s, 0.4, { throttle: 1 });
+    expect(vlen(s.ball.vel)).toBeGreaterThan(carSpeed * 1.2);
   });
 });
 

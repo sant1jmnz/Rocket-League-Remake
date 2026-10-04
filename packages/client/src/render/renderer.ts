@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import {
   BALL,
+  CAR,
+  curve,
   arenaDistance,
   qforward,
   qslerp,
@@ -23,6 +25,9 @@ import {
 import { createCarModel, type CarModel } from './car';
 
 const CAR_REST = 17.01;
+/** Suspension length of a car resting on flat ground (front / back wheels) */
+const SUSP_REST_FRONT = 24.8;
+const SUSP_REST_BACK = 23.1;
 import { ParticleSystem } from './particles';
 import { TrailRibbon } from './trails';
 import { setupEnvironment, type Environment } from './environment';
@@ -174,12 +179,17 @@ export class GameRenderer {
       const fwd = qforward(car.quat);
       const fwdSpeed = car.vel.x * fwd.x + car.vel.y * fwd.y + car.vel.z * fwd.z;
       view.wheelSpin += (fwdSpeed / 14) * dt;
-      view.steer += (-car.lastInput.steer * 0.45 - view.steer) * Math.min(1, dt * 12);
-      for (const w of view.model.wheels) {
+      view.steer += (-car.lastInput.steer * curve(CAR.STEER_ANGLE, Math.abs(fwdSpeed)) - view.steer) * Math.min(1, dt * 12);
+      view.model.wheels.forEach((w, i) => {
         const spin = w.mesh.children[0];
         spin.rotation.z = -view.wheelSpin;
         if (w.front) w.mesh.rotation.y = view.steer;
-      }
+        // Suspension: the wheel follows the simulated spring length (limited droop in the air)
+        const susp = (p.wheelSusp?.[i] ?? 0) + ((car.wheelSusp?.[i] ?? 0) - (p.wheelSusp?.[i] ?? 0)) * alpha;
+        const rest = w.front ? SUSP_REST_FRONT : SUSP_REST_BACK;
+        const offset = susp > 0 ? Math.max(-7, Math.min(6, rest - susp)) : 0;
+        w.mesh.position.y = w.baseY + offset;
+      });
 
       // Boost flame + trail
       const boosting = car.boostingTime > 0 && !car.demolished;
@@ -275,7 +285,14 @@ export class GameRenderer {
     if (localView && !localView.car.demolished) {
       this.cam.update(
         dt,
-        { pos: localView.pos, quat: localView.quat, vel: localView.car.vel, onGround: localView.car.onGround },
+        {
+          pos: localView.pos,
+          quat: localView.quat,
+          vel: localView.car.vel,
+          onGround: localView.car.onGround,
+          boosting: localView.car.boostingTime > 0,
+          supersonic: localView.car.isSupersonic,
+        },
         ballVisible ? bp : null,
         swivel,
       );
@@ -287,7 +304,7 @@ export class GameRenderer {
   }
 
   /** Main-menu garage: the selected car slowly turning on a glowing platform at midfield. */
-  renderShowcase(dt: number, body: CarBody, team: 0 | 1) {
+  renderShowcase(dt: number, body: CarBody, team: 0 | 1, carOnLeft = false) {
     this.time += dt;
     if (!this.turntable) {
       this.turntable = new THREE.Group();
@@ -333,11 +350,13 @@ export class GameRenderer {
     this.ballShadow.visible = false;
     this.padsView.update([], this.time, dt);
 
-    // Camera framing: car on the right third of the screen (menu on the left)
+    // Camera framing: car on the right third of the screen (menu on the left), or on the left third
+    // in the garage, whose panel is on the right
     const cam = this.camera;
-    cam.position.set(-120, 85, 175);
+    const sx = carOnLeft ? -1 : 1;
+    cam.position.set(-120 * sx, 85, 175);
     cam.up.set(0, 1, 0);
-    cam.lookAt(-62, 38, 24);
+    cam.lookAt(-62 * sx, 38, 24);
     this.env.update(dt);
     this.post.render();
   }
@@ -397,6 +416,7 @@ export class GameRenderer {
           break;
         }
         case 'ballHit': {
+          if (e.carId === localCarId && e.strength > 1200) this.cam.shake(Math.min(30, e.strength / 80), 0.35);
           if (e.strength > 600) {
             this.burstFx.burst(toThree(e.pos), Math.min(80, e.strength / 30), 600, new THREE.Color('#fff4cc'), 0.35, 30);
           }

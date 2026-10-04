@@ -83,25 +83,48 @@ sirve aparte, en **Ajustes → Servidor** se puede poner la URL `wss://…/ws`.
 
 ## Fidelidad con el juego real
 
-Toda la física está en `packages/shared` (TypeScript puro, determinista, 120 ticks por segundo):
+Toda la física está en `packages/shared` (TypeScript puro, determinista, 120 ticks por segundo) y es
+un **port de [RocketSim](https://github.com/ZealanL/RocketSim)** (MIT), la reimplementación de la
+física de Rocket League que usan los bots de RLBot y que coincide con el juego tick a tick:
 
-- **Estadio**: paredes en x = ±4096, fondos en y = ±5120, techo a 2044, esquinas a 45° y rampas curvas;
-  arco de 1786 × 642.775 × 880. Es una función de distancia analítica, la misma que dibuja el render.
-- **Auto** (hitbox Octane 118.01 × 84.20 × 36.16): curva de aceleración 1600→160→0 uu/s² hasta
-  1410 uu/s, boost 991.67 uu/s² hasta 2300 uu/s, supersónico desde 2200, consumo 33.3/s, curva de
-  giro real por velocidad, powerslide, adherencia en paredes (325 uu/s²), salto 291.67 + 1458.33 uu/s²
-  sostenido (máx. 0.2 s), doble salto y flips con la ventana de 1.25 s, impulso y amortiguación
-  vertical del flip, flip cancel, control aéreo con los torques y amortiguaciones reales, auto-flip.
-- **Balón**: radio 91.25, rebote 0.6, velocidad máx. 6000, drag 0.0305 y el impulso extra de Psyonix
-  al golpear.
+- **Estadio**: la malla de colisión real del estadio estándar (~8.000 triángulos: esquinas, rampas,
+  arcos con techo inclinado y fondo curvo), tomada de [rl_ball_sym](https://github.com/VirxEC/rl_ball_sym)
+  (MIT; la geometría la extrajo RLUtilities del juego). Paredes en x = ±4096, fondos en y = ±5120,
+  techo a 2048. El render dibuja esos mismos triángulos, así que lo que se ve es lo que choca.
+  Se regenera con `node tools/gen-arena-mesh.mjs <rl_ball_sym/assets/standard>`.
+- **Auto** (hitbox Octane 120.5 × 86.7 × 38.7, inercia de caja como el juego): vehículo de
+  Bullet con **cuatro rayos de suspensión** (resorte 500, amortiguación 25/40, recorrido 12 uu, escalas
+  35.75 / 54.27 delante/detrás), **fricción lateral por rueda** con la curva de deslizamiento real,
+  motor y freno como fricción de rodadura (1600 → 160 → 0 uu/s² hasta 1410 uu/s, freno 3500,
+  rodar libre 525), ángulo de dirección de las ruedas delanteras según la velocidad, powerslide
+  analógico (sube 5/s, baja 2/s) que baja la fricción lateral, fuerza adhesiva a la superficie
+  (325 uu/s², hasta 975 en paredes con acelerador) y fricción que cae en paredes sin acelerador.
+- **Aire**: salto 291.67 + 1458.33 uu/s² sostenido (0.025–0.2 s), doble salto y flips con la ventana
+  de 1.25 s, flips por torque (260 / 224 rad/s², tope 5.5 rad/s), impulso según dirección y velocidad,
+  amortiguación vertical del flip (el auto "flota" al flipear), cancelación de flip, pitch lock,
+  control aéreo con los torques 130 / 95 / 400 y amortiguaciones 30 / 20 / 50, auto-flip al saltar
+  panza arriba y auto-roll. El reseteo de flip ocurre cuando ≥ 3 ruedas tocan el balón.
+- **Balón**: radio 91.25 (apoyado a 93.15), masa 30, rebote 0.6, fricción 0.35, drag 0.03,
+  velocidad máx. 6000; contacto auto-balón con fricción 2.0 y el impulso extra de Psyonix
+  (curva 0.65 → 0.30, eje z × 0.35, componente frontal × 0.65) como máximo cada dos ticks.
+- **Contactos**: solver de impulsos secuenciales como el de Bullet (10 iteraciones, contactos
+  especulativos), auto-arena 0.3 / 0.3, auto-auto 0.09 / 0.1. Golpes y demoliciones con las curvas
+  de RocketSim (con el paragolpes, a más de 64.5 uu del centro del auto).
+- **Bots**: Novato, Pro y All-Star. Leen la predicción del balón y juegan como un jugador:
+  intercepción, línea de tiro al arco, despejes, roles en equipo, boost, tiros con salto, dodges y
+  aéreos (All-Star).
 - **Partida**: 5:00, cuenta regresiva 3-2-1, el reloj arranca con el primer toque, la regla de
   «balón al piso» en 0:00, tiempo extra con gol de oro, posiciones de kickoff reales, 34 boost pads
-  (12/100, 4 s/10 s), demoliciones y reaparición a los 3 s, puntos (gol, asistencia, atajada, tiro,
-  demolición).
+  (12/100, 4 s/10 s, cilindro de 208/144 uu), demoliciones y reaparición a los 3 s, puntos (gol,
+  asistencia, atajada, tiro, demolición).
 - **Después del gol**: 3 s de festejo y la repetición de los últimos segundos con la cámara sobre el
   goleador; se omite cuando todos aprietan saltar, online también. Al final, la pantalla de
   resultados con las estadísticas de cada jugador y el MVP (el mejor puntaje del equipo ganador).
-- **Cámara**: FOV 110, distancia 270, altura 110, ángulo −3, rigidez 0.5, giro 5, transición 1.
+- **Cámara**: los valores por defecto y rangos del juego (Ajustes → Cámara): FOV 90 (60–110),
+  distancia 270 (100–400), altura 100 (40–200), ángulo −3 (−15–0), rigidez 0.5 (0–1), velocidad de
+  giro 2.5 (1–10), velocidad de transición 1.2 (1–2), sacudida activada e invertir giro. Anclada al
+  auto (la rigidez solo la aleja a alta velocidad), estable durante flips, y con la sacudida leve al
+  usar boost / ir supersónico y en golpes fuertes, goles y demoliciones.
 
 ## Multijugador
 

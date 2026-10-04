@@ -1,8 +1,7 @@
-import { ARENA, BALL, BOOST_PAD, CAR, DT, MATCH, type Team } from '../constants.js';
+import { BALL, BOOST_PAD, CAR, DT, MATCH, type Team } from '../constants.js';
 import { BOOST_PADS } from '../arena/boostpads.js';
-import { predictBall, stepBall } from '../physics/ball.js';
-import { stepCar } from '../physics/car.js';
-import { collideCarBall, collideCars, tickBumpCooldowns } from '../physics/collisions.js';
+import { predictBall } from '../physics/ball.js';
+import { stepPhysics } from '../physics/world.js';
 import { vdist, vlen, v3, type Vec3 } from '../math/vec.js';
 import {
   createBall,
@@ -73,7 +72,17 @@ function placeAtSpawn(car: CarState, s: Spawn): void {
   car.hasFlipped = false;
   car.isFlipping = false;
   car.isSupersonic = false;
+  car.supersonicTime = 0;
+  car.isBoosting = false;
   car.boostingTime = 0;
+  car.isAutoFlipping = false;
+  car.autoFlipTimer = 0;
+  car.handbrakeAmount = 0;
+  car.jumpTime = 0;
+  car.flipTime = 0;
+  car.airTime = 0;
+  car.airTimeSinceJump = 0;
+  car.worldContact = false;
   car.lastInput = emptyInput();
 }
 
@@ -104,6 +113,7 @@ export function resetKickoff(state: GameState): void {
   }
   state.ball = createBall();
   state.pads = state.pads.map(() => 0);
+  state.padLocks = state.pads.map(() => -1);
   state.phase = 'countdown';
   state.phaseTimer = MATCH.COUNTDOWN;
   state.clockRunning = false;
@@ -135,7 +145,9 @@ export function startMatch(state: GameState, duration: number = MATCH.DURATION):
 // Tick
 // ---------------------------------------------------------------------------
 
-const GOAL_LINE = ARENA.HALF_LENGTH + BALL.RADIUS;
+const GOAL_LINE = BALL.GOAL_THRESHOLD_Y + BALL.RADIUS;
+/** Rough half-diagonal of the car bounds (for the pad lock box) */
+const CAR_BOUND_RADIUS = 75;
 
 /** Which goal (+1 orange / -1 blue / 0 none) the ball would enter within `seconds`. */
 export function predictGoal(state: GameState, seconds = 3): number {
@@ -189,86 +201,86 @@ export function stepGame(state: GameState, getInput: InputSource): GameEvent[] {
   }
 
   const frozen = state.phase === 'countdown';
-  const ballActive = state.phase === 'playing' || state.phase === 'freeplay' || state.phase === 'countdown';
+  const ballActive = state.phase === 'playing' || state.phase === 'freeplay';
 
-  // -------------------------------------------------------------- cars
+  // ------------------------------------------------------- respawns
   for (const car of state.cars) {
-    tickBumpCooldowns(car, dt);
-    if (car.demolished) {
-      car.respawnTimer -= dt;
-      if (car.respawnTimer <= 0) {
-        car.demolished = false;
-        car.boost = CAR.BOOST_START;
-        placeAtSpawn(car, freeRespawnSpot(state, car));
-        events.push({ type: 'respawn', carId: car.id });
-      }
-      continue;
-    }
-    const ev = stepCar(car, getInput(car), dt, state.unlimitedBoost, frozen);
-    if (ev.jumped) events.push({ type: 'jump', carId: car.id });
-    if (ev.doubleJumped) events.push({ type: 'doubleJump', carId: car.id });
-    if (ev.flipped) events.push({ type: 'flip', carId: car.id });
-    if (ev.landed) events.push({ type: 'land', carId: car.id });
-    if (ev.wallHit) events.push({ type: 'carWallHit', carId: car.id, strength: ev.wallHit });
-  }
-
-  // -------------------------------------------------------------- ball
-  if (ballActive && state.phase !== 'countdown') {
-    const impact = stepBall(state.ball, dt);
-    if (impact > 250) events.push({ type: 'ballBounce', speed: impact, pos: { ...state.ball.pos } });
-  }
-
-  // ------------------------------------------------------- car vs ball
-  if (ballActive && !frozen) {
-    for (const car of state.cars) {
-      const goalPredBefore = state.ballGoalPrediction;
-      const hit = collideCarBall(car, state.ball, state.tick);
-      if (!hit) continue;
-      if (!hit.fresh) continue;
-      events.push({ type: 'ballHit', carId: car.id, strength: hit.strength, pos: { ...state.ball.pos } });
-      registerTouch(state, car, goalPredBefore, events);
+    if (!car.demolished) continue;
+    car.respawnTimer -= dt;
+    if (car.respawnTimer <= 0) {
+      car.demolished = false;
+      car.boost = CAR.BOOST_START;
+      placeAtSpawn(car, freeRespawnSpot(state, car));
+      car.pos.z = CAR.RESPAWN_Z;
+      events.push({ type: 'respawn', carId: car.id });
     }
   }
 
-  // -------------------------------------------------------- car vs car
-  for (let i = 0; i < state.cars.length; i++) {
-    for (let j = i + 1; j < state.cars.length; j++) {
-      const a = state.cars[i];
-      const b = state.cars[j];
-      const r = collideCars(a, b);
-      if (!r) continue;
-      if (r.bump) events.push({ type: 'bump', ...r.bump });
-      if (r.demo) {
-        const victim = r.demo.victim === a.id ? a : b;
-        const attacker = victim === a ? b : a;
-        victim.demolished = true;
-        victim.respawnTimer = CAR.DEMO_RESPAWN_TIME;
-        attacker.stats.demos++;
-        attacker.stats.score += MATCH.POINTS_DEMO;
-        events.push({ type: 'demo', ...r.demo, pos: { ...victim.pos } });
-      }
-    }
+  // ------------------------------------------------------- physics
+  const goalPredBefore = state.ballGoalPrediction;
+  const phys = stepPhysics(state, getInput, { ballActive, frozen });
+  for (const [carId, ev] of phys.carEvents) {
+    if (ev.jumped) events.push({ type: 'jump', carId });
+    if (ev.doubleJumped) events.push({ type: 'doubleJump', carId });
+    if (ev.flipped) events.push({ type: 'flip', carId });
+    if (ev.landed) events.push({ type: 'land', carId });
+    if (ev.wallHit) events.push({ type: 'carWallHit', carId, strength: ev.wallHit });
+  }
+  if (phys.ballImpact > 250) events.push({ type: 'ballBounce', speed: phys.ballImpact, pos: { ...state.ball.pos } });
+  for (const hit of phys.ballHits) {
+    if (!hit.fresh) continue;
+    const car = state.cars.find((c) => c.id === hit.carId)!;
+    events.push({ type: 'ballHit', carId: car.id, strength: hit.strength, pos: { ...state.ball.pos } });
+    registerTouch(state, car, goalPredBefore, events);
+  }
+  for (const b of phys.bumps) events.push({ type: 'bump', ...b });
+  for (const d of phys.demos) {
+    const victim = state.cars.find((c) => c.id === d.victim)!;
+    const attacker = state.cars.find((c) => c.id === d.attacker)!;
+    if (victim.demolished) continue;
+    victim.demolished = true;
+    victim.respawnTimer = CAR.DEMO_RESPAWN_TIME;
+    victim.vel = v3();
+    victim.angVel = v3();
+    attacker.stats.demos++;
+    attacker.stats.score += MATCH.POINTS_DEMO;
+    events.push({ type: 'demo', ...d, pos: { ...victim.pos } });
   }
 
-  // ------------------------------------------------------- boost pads
+  // ------------------------------------------------------- boost pads (RocketSim BoostPad)
   for (let i = 0; i < BOOST_PADS.length; i++) {
-    if (state.pads[i] > 0) {
-      state.pads[i] = Math.max(0, state.pads[i] - dt);
-      continue;
-    }
+    if (state.pads[i] > 0) state.pads[i] = Math.max(0, state.pads[i] - dt);
+    const active = state.pads[i] === 0;
     const pad = BOOST_PADS[i];
-    const radius = pad.big ? BOOST_PAD.BIG_RADIUS : BOOST_PAD.SMALL_RADIUS;
-    const height = pad.big ? BOOST_PAD.BIG_HEIGHT : BOOST_PAD.SMALL_HEIGHT;
+    let locked: CarState | null = null;
     for (const car of state.cars) {
-      if (car.demolished || car.boost >= CAR.BOOST_MAX) continue;
-      const dx = car.pos.x - pad.x;
-      const dy = car.pos.y - pad.y;
-      if (dx * dx + dy * dy > radius * radius || car.pos.z > height) continue;
-      car.boost = Math.min(CAR.BOOST_MAX, car.boost + (pad.big ? BOOST_PAD.BIG_AMOUNT : BOOST_PAD.SMALL_AMOUNT));
-      state.pads[i] = pad.big ? BOOST_PAD.BIG_RESPAWN : BOOST_PAD.SMALL_RESPAWN;
-      events.push({ type: 'boostPickup', carId: car.id, pad: i, big: pad.big });
-      break;
+      if (car.demolished) continue;
+      let colliding: boolean;
+      if (state.padLocks[i] === car.id) {
+        // car already on the pad: its bounds against the pad box
+        const box = pad.big ? BOOST_PAD.BIG_BOX : BOOST_PAD.SMALL_BOX;
+        const r = CAR_BOUND_RADIUS;
+        colliding =
+          car.pos.x + r > pad.x - box &&
+          car.pos.x - r < pad.x + box &&
+          car.pos.y + r > pad.y - box &&
+          car.pos.y - r < pad.y + box &&
+          car.pos.z + r > pad.z &&
+          car.pos.z - r < pad.z + BOOST_PAD.BOX_HEIGHT;
+      } else {
+        const rad = pad.big ? BOOST_PAD.BIG_RADIUS : BOOST_PAD.SMALL_RADIUS;
+        const dx = car.pos.x - pad.x;
+        const dy = car.pos.y - pad.y;
+        colliding = dx * dx + dy * dy < rad * rad && Math.abs(car.pos.z - pad.z) < BOOST_PAD.CYL_HEIGHT;
+      }
+      if (colliding && car.boost < CAR.BOOST_MAX) locked = car;
     }
+    if (locked && active) {
+      locked.boost = Math.min(CAR.BOOST_MAX, locked.boost + (pad.big ? BOOST_PAD.BIG_AMOUNT : BOOST_PAD.SMALL_AMOUNT));
+      state.pads[i] = pad.big ? BOOST_PAD.BIG_RESPAWN : BOOST_PAD.SMALL_RESPAWN;
+      events.push({ type: 'boostPickup', carId: locked.id, pad: i, big: pad.big });
+    }
+    state.padLocks[i] = locked ? locked.id : -1;
   }
 
   // ------------------------------------------------------------ goals
@@ -286,7 +298,7 @@ export function stepGame(state: GameState, getInput: InputSource): GameEvent[] {
         if (state.clock === 0) state.waitingForBallGround = true;
       }
     }
-    if (state.waitingForBallGround && state.ball.pos.z <= BALL.RADIUS + 2) {
+    if (state.waitingForBallGround && state.ball.pos.z <= BALL.REST_Z + 2) {
       state.waitingForBallGround = false;
       endOfRegulation(state, events);
     }

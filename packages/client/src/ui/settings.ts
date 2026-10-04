@@ -30,7 +30,9 @@ export function loadSettings(): AppSettings {
     const raw = localStorage.getItem(KEY);
     if (!raw) return d;
     const s = JSON.parse(raw) as Partial<AppSettings>;
-    return { ...d, ...s, camera: { ...d.camera, ...(s.camera ?? {}) } };
+    // Settings saved before the camera matched the game's defaults: start from those defaults once
+    const camera = s.camera && 'invertSwivel' in s.camera ? { ...d.camera, ...s.camera } : d.camera;
+    return { ...d, ...s, camera };
   } catch {
     return d;
   }

@@ -1,4 +1,4 @@
-import { TEAM_NAMES, matchMvp, type BotDifficulty, type GameState, type RoomInfo, type Team, type TeamSize } from '@rl/shared';
+import { CAR, TEAM_NAMES, matchMvp, type BotDifficulty, type GameState, type RoomInfo, type Team, type TeamSize } from '@rl/shared';
 import { ACTION_LABELS, DEFAULT_KEYS, DEFAULT_PAD, PAD_BUTTON_NAMES, keyLabel, type Action } from '../input/bindings';
 import type { InputManager } from '../input/manager';
 import { DEFAULT_CAMERA } from '../camera/camera';
@@ -135,7 +135,7 @@ export class Menus {
       <div class="garage-section">Vista previa</div>
       <div class="seg team"><button class="seg-btn on t0" data-t="0">Azul</button><button class="seg-btn t1" data-t="1">Naranja</button></div>
       <div class="garage-stats">
-        <div><span>Largo</span><b>118.0</b></div><div><span>Ancho</span><b>84.2</b></div><div><span>Alto</span><b>36.2</b></div>
+        <div><span>Largo</span><b>${CAR.HITBOX_SIZE.x.toFixed(1)}</b></div><div><span>Ancho</span><b>${CAR.HITBOX_SIZE.y.toFixed(1)}</b></div><div><span>Alto</span><b>${CAR.HITBOX_SIZE.z.toFixed(1)}</b></div>
       </div>
       <button class="btn ghost back">← Volver</button>
     </div>`);
@@ -408,6 +408,7 @@ export class Menus {
        ${slider('swivelSpeed', 'Velocidad de giro', 1, 10, 0.5)}
        ${slider('transitionSpeed', 'Velocidad de transición', 1, 2, 0.1)}
        <div class="row"><label>Sacudida de cámara</label><input type="checkbox" class="shake" ${c.shake ? 'checked' : ''}/></div>
+       <div class="row"><label>Invertir giro de cámara</label><input type="checkbox" class="inv-swivel" ${c.invertSwivel ? 'checked' : ''}/></div>
        <button class="btn tiny cam-reset">Cámara por defecto</button>
        <div class="section">General</div>
        <div class="row"><label>Volumen</label><input type="range" class="vol" min="0" max="1" step="0.05" value="${this.settings.volume}"/></div>
@@ -429,6 +430,10 @@ export class Menus {
     });
     node.querySelector<HTMLInputElement>('.shake')!.addEventListener('change', (e) => {
       c.shake = (e.target as HTMLInputElement).checked;
+      this.cb.settingsChanged();
+    });
+    node.querySelector<HTMLInputElement>('.inv-swivel')!.addEventListener('change', (e) => {
+      c.invertSwivel = (e.target as HTMLInputElement).checked;
       this.cb.settingsChanged();
     });
     node.querySelector<HTMLInputElement>('.vol')!.addEventListener('input', (e) => {
