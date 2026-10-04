@@ -1,4 +1,4 @@
-import { TEAM_NAMES, matchMvp, type BotDifficulty, type GameState, type RoomInfo, type Team, type TeamSize } from '@rl/shared';
+import { CAR, TEAM_NAMES, matchMvp, type BotDifficulty, type GameState, type RoomInfo, type Team, type TeamSize } from '@rl/shared';
 import { ACTION_LABELS, DEFAULT_KEYS, DEFAULT_PAD, PAD_BUTTON_NAMES, keyLabel, type Action } from '../input/bindings';
 import type { InputManager } from '../input/manager';
 import { DEFAULT_CAMERA } from '../camera/camera';
@@ -135,7 +135,7 @@ export class Menus {
       <div class="garage-section">Vista previa</div>
       <div class="seg team"><button class="seg-btn on t0" data-t="0">Azul</button><button class="seg-btn t1" data-t="1">Naranja</button></div>
       <div class="garage-stats">
-        <div><span>Largo</span><b>118.0</b></div><div><span>Ancho</span><b>84.2</b></div><div><span>Alto</span><b>36.2</b></div>
+        <div><span>Largo</span><b>${CAR.HITBOX_SIZE.x.toFixed(1)}</b></div><div><span>Ancho</span><b>${CAR.HITBOX_SIZE.y.toFixed(1)}</b></div><div><span>Alto</span><b>${CAR.HITBOX_SIZE.z.toFixed(1)}</b></div>
       </div>
       <button class="btn ghost back">← Volver</button>
     </div>`);

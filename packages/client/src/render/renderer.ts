@@ -297,7 +297,7 @@ export class GameRenderer {
   }
 
   /** Main-menu garage: the selected car slowly turning on a glowing platform at midfield. */
-  renderShowcase(dt: number, body: CarBody, team: 0 | 1) {
+  renderShowcase(dt: number, body: CarBody, team: 0 | 1, carOnLeft = false) {
     this.time += dt;
     if (!this.turntable) {
       this.turntable = new THREE.Group();
@@ -343,11 +343,13 @@ export class GameRenderer {
     this.ballShadow.visible = false;
     this.padsView.update([], this.time, dt);
 
-    // Camera framing: car on the right third of the screen (menu on the left)
+    // Camera framing: car on the right third of the screen (menu on the left), or on the left third
+    // in the garage, whose panel is on the right
     const cam = this.camera;
-    cam.position.set(-120, 85, 175);
+    const sx = carOnLeft ? -1 : 1;
+    cam.position.set(-120 * sx, 85, 175);
     cam.up.set(0, 1, 0);
-    cam.lookAt(-62, 38, 24);
+    cam.lookAt(-62 * sx, 38, 24);
     this.env.update(dt);
     this.post.render();
   }

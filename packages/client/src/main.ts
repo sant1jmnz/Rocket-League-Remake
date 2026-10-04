@@ -266,7 +266,7 @@ function loop(now: number) {
       }, MATCH.END_DELAY * 1000);
     }
   } else {
-    renderer.renderShowcase(dt, settings.carBody, previewTeam);
+    renderer.renderShowcase(dt, settings.carBody, previewTeam, menus.screen === 'garage');
     audio.updateCar(null);
   }
   requestAnimationFrame(loop);
